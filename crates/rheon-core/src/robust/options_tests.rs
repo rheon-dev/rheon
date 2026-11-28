@@ -65,6 +65,8 @@ fn ridge_on(k: usize, decay: Decay, ridge: f64) -> EwRidge {
         max_rows_between_snapshots: None,
         constraints: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     })
     .unwrap()
 }

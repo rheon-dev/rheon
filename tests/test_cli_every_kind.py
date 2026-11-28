@@ -294,6 +294,32 @@ CASES: list[Case] = [
         ),
     ),
     Case(
+        "ewridge_parent_prior",
+        "ewridge",
+        full(
+            **CLOSE,
+            **LS,
+            ridge=0.05,
+            standardize=True,
+            prior_from="ew_parent",
+            prior_weight=5.0,
+            prior_include_intercept=False,
+            solve_every=3.0,
+        ),
+        [
+            (
+                "ew_parent",
+                "ewridge",
+                {
+                    **XY,
+                    **without(STREAM, ("group",)),
+                    "ridge": 0.05,
+                    "standardize": True,
+                },
+            ),
+        ],
+    ),
+    Case(
         "ewridge_temporal",
         "ewridge",
         dict(

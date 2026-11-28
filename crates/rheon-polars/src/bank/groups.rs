@@ -329,10 +329,16 @@ pub(crate) fn group_indices<'c>(chunk: &'c ArrowChunk, spec: &Spec) -> PolarsRes
                         )
                     }))
                 }
-                // `ArrowChunk::key` never returns the numeric form, a clock
-                // or a boolean.
-                ArrowCol::F64(_) | ArrowCol::Num(_) | ArrowCol::Nanos(_) | ArrowCol::Bool(_) => {
-                    unreachable!("a group key is never read as a number, a clock or a boolean")
+                // `ArrowChunk::key` never returns the numeric form, a clock,
+                // a boolean, or a list.
+                ArrowCol::F64(_)
+                | ArrowCol::Num(_)
+                | ArrowCol::Nanos(_)
+                | ArrowCol::Bool(_)
+                | ArrowCol::ListF64(_) => {
+                    unreachable!(
+                        "a group key is never read as a number, a clock, a boolean, or a list"
+                    )
                 }
             }
         }

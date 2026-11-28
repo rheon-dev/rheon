@@ -26,8 +26,8 @@ use crate::resolvers::{
 use crate::rows::{FeatureCol, FeatureCols, FeatureRows};
 use crate::spec::{ModelKind, Spec};
 use crate::stream::{
-    AnyModel, ChunkOut, ClockDtype, ClockRefusal, StepRefusal, Stream, StreamState, combo_labels,
-    last_accepted,
+    AnyModel, ChunkOut, ClockDtype, ClockRefusal, ParentCapture, PriorRows, StepRefusal, Stream,
+    StreamState, combo_labels, last_accepted,
 };
 use crate::summary::{DataSummary, Role, SummaryRow, counts, describe_frame, summary_frame};
 use crate::windows_frame::WindowsRun;
@@ -310,6 +310,9 @@ struct SpecColumns {
     /// `Vec<Option<String>>` -- which would allocate a string per row of the
     /// chunk to use one of them.
     session_str: Option<Utf8ViewArray>,
+    /// Per-row dynamic priors in layout order (from a `coef_prior` column or
+    /// populated between topological layers from a `prior_from` parent spec).
+    prior: Option<PriorRows>,
 }
 
 /// Values as `f64`, null as NaN, in the order `layout` gives (see
@@ -784,6 +787,7 @@ fn extract(
         || join_maybe_par(par, clock, || join_maybe_par(par, session, weight)),
     );
     let (session, session_str) = session?;
+    let prior = prior::extract_prior_column(chunk, spec, scoring, layout)?;
     Ok(SpecColumns {
         features: features?,
         targets: targets?,
@@ -792,6 +796,7 @@ fn extract(
         session,
         weight: weight?,
         session_str,
+        prior,
     })
 }
 
@@ -1177,9 +1182,16 @@ fn session_bounds(
 type Filled<'s> = Vec<(usize, Sink<'s>)>;
 
 /// What `process` returns: each task's runs, with its spec's index, the
-/// rows the streams closed with, the filled sinks, and the run buffers a
-/// task was given or emptied into a sink and did not keep.
-type Processed<'s> = (Vec<Runs>, Vec<ClosedRow>, Filled<'s>, Vec<Box<ChunkOut>>);
+/// rows the streams closed with, the filled sinks, the run buffers a
+/// task was given or emptied into a sink and did not keep, and any parent
+/// prior captures for specs referenced by downstream `prior_from` children.
+type Processed<'s> = (
+    Vec<Runs>,
+    Vec<ClosedRow>,
+    Filled<'s>,
+    Vec<Box<ChunkOut>>,
+    Vec<(usize, ParentCapture)>,
+);
 
 /// The runs one task hands back, each with its spec's index: usually one,
 /// which is held in the task's result, not in a list of its own (an
@@ -1231,6 +1243,7 @@ impl IntoIterator for Runs {
 fn process<'s>(
     work: Vec<(usize, &GroupKey, &[usize], usize, &mut Stream)>,
     specs: &[Spec],
+    derived: &[SpecDerived],
     cfgs: &[ClockCfg],
     cols: &[SpecColumns],
     formulas: &[Option<FormulaBundle>],
@@ -1243,6 +1256,7 @@ fn process<'s>(
         Vec<ClosedRow>,
         Option<(usize, Sink<'s>)>,
         Option<Box<ChunkOut>>,
+        Option<(usize, ParentCapture)>,
     );
     let work: Vec<_> = work
         .into_iter()
@@ -1273,6 +1287,10 @@ fn process<'s>(
             let formula_targets = formulas[si].as_ref().map(|b| b.targets(key));
             let mut outs = Runs::default();
             let mut closed: Vec<ClosedRow> = Vec::new();
+            let mut capture = derived[si].is_prior_parent.then(|| {
+                let width = spec.m() * (spec.k() + usize::from(spec.fit_intercept));
+                ParentCapture::new(width)
+            });
             // A session close splits the run: the rows before the boundary
             // are the span, the stream emits its row and starts over, and
             // the rows after are a fresh stream's first rows (E54). Every
@@ -1329,39 +1347,44 @@ fn process<'s>(
                 let mut off = start;
                 for run in idx[start..end].chunks(run_rows) {
                     let mut out = run_buffers(spare.take(), spec, n_models, n_slots, run.len());
-                    let learn =
-                        |stream: &mut Stream, out: &mut ChunkOut, rows: &mut FeatureRows| {
-                            sc.features.rows_into(rows, base + off, run.len());
-                            stream.process_chunk(
-                                spec,
-                                &cfgs[si],
-                                rows,
-                                &sc.targets,
-                                sc.clock.as_ref(),
-                                sc.label.as_ref(),
-                                sc.session.as_deref(),
-                                sc.weight.as_deref(),
-                                run,
-                                base + off,
-                                out,
-                                coef_at,
-                                formula_targets,
-                            )
-                        };
+                    let prior_in = sc.prior.as_ref().map(|p| p.view(base + off));
+                    let learn = |stream: &mut Stream,
+                                 out: &mut ChunkOut,
+                                 rows: &mut FeatureRows,
+                                 cap: Option<&mut ParentCapture>| {
+                        sc.features.rows_into(rows, base + off, run.len());
+                        stream.process_chunk_with_prior(
+                            spec,
+                            &cfgs[si],
+                            rows,
+                            &sc.targets,
+                            sc.clock.as_ref(),
+                            sc.label.as_ref(),
+                            sc.session.as_deref(),
+                            sc.weight.as_deref(),
+                            run,
+                            base + off,
+                            out,
+                            coef_at,
+                            formula_targets,
+                            prior_in,
+                            cap,
+                        )
+                    };
                     // The run before this one is copied into its sink on
                     // another thread while this one is learned.
                     let r = match (sink.as_mut(), pending.as_mut()) {
                         (Some(sink), Some(prev)) => {
                             let (r, ()) = join_maybe_par(
                                 par(),
-                                || learn(stream, &mut out, &mut rows),
+                                || learn(stream, &mut out, &mut rows, capture.as_mut()),
                                 || sink.absorb(std::slice::from_mut(prev)),
                             );
                             // Copied: its buffers are the run after's.
                             spare = pending.take();
                             r
                         }
-                        _ => learn(stream, &mut out, &mut rows),
+                        _ => learn(stream, &mut out, &mut rows, capture.as_mut()),
                     };
                     off += run.len();
                     match r {
@@ -1409,20 +1432,28 @@ fn process<'s>(
             if let (Some(sink), Some(prev)) = (sink.as_mut(), pending.as_mut()) {
                 sink.absorb(std::slice::from_mut(prev));
             }
-            (outs, closed, sink.map(|s| (si, s)), pending.or(spare))
+            (
+                outs,
+                closed,
+                sink.map(|s| (si, s)),
+                pending.or(spare),
+                capture.map(|c| (si, c)),
+            )
         },
     );
     let mut outs = Vec::with_capacity(per_task.len());
     let mut closed = Vec::new();
     let mut filled = Vec::new();
     let mut left = Vec::new();
-    for (o, c, s, l) in per_task {
+    let mut captures = Vec::new();
+    for (o, c, s, l, cap) in per_task {
         outs.push(o);
         closed.extend(c);
         filled.extend(s);
         left.extend(l);
+        captures.extend(cap);
     }
-    (outs, closed, filled, left)
+    (outs, closed, filled, left, captures)
 }
 
 /// A sink for each spec that one stream serves in this work -- no group, or
@@ -1463,9 +1494,26 @@ fn finish_sinks(filled: Filled<'_>, out: &mut [Option<StructArray>]) -> PolarsRe
     Ok(())
 }
 
-/// [`process`] without the learning: [`Stream::predict_chunk`] per task.
+/// Either a live group's stream or a temporary fresh stream for an unseen
+/// cold-start child group in `Bank::predict`.
+enum ScoreStream<'a> {
+    Live(&'a Stream),
+    Fresh(Box<Stream>),
+}
+
+impl ScoreStream<'_> {
+    #[inline]
+    fn get(&self) -> &Stream {
+        match self {
+            Self::Live(s) => s,
+            Self::Fresh(s) => s,
+        }
+    }
+}
+
+/// [`process`] without the learning: [`Stream::predict_chunk_with_prior`] per task.
 fn score(
-    work: Vec<(usize, &[usize], usize, &Stream)>,
+    work: Vec<(usize, &[usize], usize, ScoreStream<'_>)>,
     specs: &[Spec],
     cfgs: &[ClockCfg],
     cols: &[SpecColumns],
@@ -1475,6 +1523,7 @@ fn score(
         threads_tests::probe(&specs[si].name);
         let spec = &specs[si];
         let sc = &cols[si];
+        let stream = stream.get();
         // Scoring refuses no clock (`Stream::predict_chunk`).
         let mut out = Box::new(ChunkOut::new(
             spec,
@@ -1484,7 +1533,8 @@ fn score(
         ));
         // Every row of the task at once: scoring is one pass.
         let rows = sc.features.rows(base, idx.len());
-        stream.predict_chunk(
+        let prior_in = sc.prior.as_ref().map(|p| p.view(base));
+        stream.predict_chunk_with_prior(
             spec,
             &cfgs[si],
             &rows,
@@ -1494,6 +1544,7 @@ fn score(
             idx,
             base,
             &mut out,
+            prior_in,
         );
         (si, Ok(out))
     })
@@ -2151,6 +2202,9 @@ pub struct Bank {
     /// Per spec, whether the notice of a group's refits given up past the
     /// budget has been raised; once a bank. Not state.
     refit_noticed: Vec<bool>,
+    /// Topological execution layers over `prior_from` and `compare` edges;
+    /// derived at [`Bank::new`], not state.
+    layers: Vec<Vec<usize>>,
 }
 
 /// Everything `assemble` needs that follows from the `Spec` alone.
@@ -2177,6 +2231,11 @@ pub struct SpecDerived {
     /// `(a, b)`. Resolved once in [`Bank::new`], which also checks that the
     /// residual fields the targets name exist on both.
     compare: Option<(usize, usize)>,
+    /// For an `ewridge` with `prior_from`: the parent spec's index in the bank.
+    prior_parent: Option<usize>,
+    /// True when at least one downstream `ewridge` references this spec via
+    /// `prior_from`.
+    is_prior_parent: bool,
 }
 
 impl SpecDerived {
@@ -2212,6 +2271,8 @@ impl SpecDerived {
             m,
             per_model,
             compare: None,
+            prior_parent: None,
+            is_prior_parent: false,
         }
     }
 }
@@ -2348,7 +2409,7 @@ impl Bank {
             .iter()
             .map(|s| s.clock_cfg())
             .collect::<Result<Vec<_>, _>>()?;
-        let derived = specs
+        let mut derived = specs
             .iter()
             .map(|s| {
                 let mut d = SpecDerived::new(s);
@@ -2356,6 +2417,7 @@ impl Bank {
                 Ok(d)
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let layers = prior::resolve_dag(&specs, &mut derived)?;
         let states = specs.iter().map(|_| Streams::default()).collect();
         let high_water = specs.iter().map(|_| None).collect();
         let key_dtypes = vec![[None, None]; specs.len()];
@@ -2430,6 +2492,7 @@ impl Bank {
             spares: Spares::default(),
             refit_reserved: vec![0.0; n_specs],
             refit_noticed: vec![false; n_specs],
+            layers,
         })
     }
 
@@ -3904,139 +3967,128 @@ impl Bank {
             }
         }
 
-        // Two phases: a `seqtest` that compares two specs reads the residuals
-        // they report for this chunk, so those run and assemble first, and
-        // the comparisons after (docs/ENHANCEMENTS.md E42). The two checks
-        // above covered both. What can still refuse the chunk is found as the
-        // rows go in -- a window past a refusing `window_budget` the pre-pass
-        // cannot see, under `drift_action = "reset"` (review 2026-09-12, P4)
-        // -- by which time the streams have learned part of it: the `forget`
-        // paths below drop the streams the chunk created, and the bank marks
-        // itself `broken` rather than go on from there.
-        let (work2, work1): (Vec<_>, Vec<_>) = work
-            .into_iter()
-            .partition(|(si, ..)| derived[*si].compare.is_some());
+        // Multi-layer topological execution covering both `prior_from`
+        // parent-child chains and `seqtest` comparisons. Specs in the same
+        // layer have no dependencies on one another and run in parallel on the
+        // bank's pool; layers run in topological order so every parent spec
+        // captures its pre/post coefficients (and every compared spec
+        // assembles its residuals) before downstream layers consume them.
+        let mut layer_of = vec![0usize; specs.len()];
+        for (li, layer) in self.layers.iter().enumerate() {
+            for &si in layer {
+                layer_of[si] = li;
+            }
+        }
+        let mut layer_work: Vec<Vec<_>> = (0..self.layers.len()).map(|_| Vec::new()).collect();
+        for item in work {
+            layer_work[layer_of[item.0]].push(item);
+        }
         let mut out: Vec<Option<StructArray>> = specs.iter().map(|_| None).collect();
         let mut per_spec_rows: Vec<Vec<Box<ChunkOut>>> =
             (0..specs.len()).map(|_| Vec::new()).collect();
         let mut closed: Vec<ClosedRow> = Vec::new();
+        let mut parent_priors: Vec<Option<(Vec<f64>, Vec<f64>)>> =
+            (0..specs.len()).map(|_| None).collect();
         // From here the streams learn, and raise their notices as they do:
         // a return before the end leaves them in the streams
         // (`notices_left`).
         let notices_left = std::mem::replace(&mut self.notices_left, true);
-        let sinks1 = sinks(work1.iter().map(|w| w.0), specs, derived, n, clock_dtypes);
-        let (rows1, closed1, filled1, left1) = process(
-            work1,
-            specs,
-            cfgs,
-            &cols,
-            &formulas,
-            chunk.rows(),
-            sinks1,
-            &mut self.spares,
-        );
-        closed.extend(closed1);
-        for out in left1 {
-            self.spares.give(out);
-        }
-        for (si, r) in rows1.into_iter().flatten() {
-            match r {
-                Ok(o) => per_spec_rows[si].push(o),
-                Err(e) => {
-                    drop(work2);
-                    forget(&mut self.states, &mut self.resolvers, &fresh);
-                    refits_before.restore(
-                        &mut self.refit_reserved,
-                        &mut self.refit_noticed,
-                        &mut self.notices,
-                    );
-                    self.broken = Some(e.to_string());
-                    return Err(e);
-                }
-            }
-        }
-        // A return here leaves the notices the rows raised in their streams,
-        // as an output that cannot be assembled below would.
-        if std::mem::take(&mut self.fail_after_learning) {
-            return Err(polars_err!(ComputeError:
-                "bank: a failure after learning, which a test asked for. Turn off \
-                 fail_next_call_after_learning to learn without it."
-            ));
-        }
-        let mut t_process = t2.elapsed();
-        let t3 = std::time::Instant::now();
-        finish_sinks(filled1, &mut out)?;
-        // Specs assemble independently (docs/records/PERFORMANCE-LOG.md P4).
-        assemble_phase(
-            specs,
-            derived,
-            n,
-            &mut per_spec_rows,
-            &mut out,
-            clock_dtypes,
-            |si| derived[si].compare.is_none(),
-            &mut self.spares,
-        )?;
-        let mut t_assemble = t3.elapsed();
-        if !work2.is_empty() {
-            let t4 = std::time::Instant::now();
-            for (si, d) in derived.iter().enumerate() {
-                if let Some(ab) = d.compare {
+        let mut t_process = std::time::Duration::ZERO;
+        let mut t_assemble = std::time::Duration::ZERO;
+
+        for (li, layer_specs) in self.layers.iter().enumerate() {
+            let t_layer = std::time::Instant::now();
+            for &si in layer_specs {
+                if let Some(ab) = derived[si].compare {
                     cols[si].targets = compare_targets(&specs[si], ab, &out, layouts[si])?;
                 }
-            }
-            let sinks2 = sinks(work2.iter().map(|w| w.0), specs, derived, n, clock_dtypes);
-            let (rows2, closed2, filled2, left2) = process(
-                work2,
-                specs,
-                cfgs,
-                &cols,
-                &formulas,
-                chunk.rows(),
-                sinks2,
-                &mut self.spares,
-            );
-            closed.extend(closed2);
-            for out in left2 {
-                self.spares.give(out);
-            }
-            for (si, r) in rows2.into_iter().flatten() {
-                match r {
-                    Ok(o) => per_spec_rows[si].push(o),
-                    Err(e) => {
-                        forget(&mut self.states, &mut self.resolvers, &fresh);
-                        refits_before.restore(
-                            &mut self.refit_reserved,
-                            &mut self.refit_noticed,
-                            &mut self.notices,
-                        );
-                        self.broken = Some(e.to_string());
-                        return Err(e);
-                    }
+                if let Some(pi) = derived[si].prior_parent {
+                    let (pre_c, post_c) = parent_priors[pi]
+                        .as_ref()
+                        .expect("parent spec ran in an earlier topological layer");
+                    let width =
+                        specs[si].m() * (specs[si].k() + usize::from(specs[si].fit_intercept));
+                    cols[si].prior =
+                        Some(prior::gather_prior_rows(pre_c, post_c, width, layouts[si]));
                 }
             }
-            t_process += t4.elapsed();
-            let t6 = std::time::Instant::now();
-            finish_sinks(filled2, &mut out)?;
-            t_assemble += t6.elapsed();
+            let w_layer = std::mem::take(&mut layer_work[li]);
+            let mut layer_caps: Vec<Vec<ParentCapture>> =
+                (0..specs.len()).map(|_| Vec::new()).collect();
+            if !w_layer.is_empty() {
+                let sinks_l = sinks(w_layer.iter().map(|w| w.0), specs, derived, n, clock_dtypes);
+                let (rows_l, closed_l, filled_l, left_l, caps_l) = process(
+                    w_layer,
+                    specs,
+                    derived,
+                    cfgs,
+                    &cols,
+                    &formulas,
+                    chunk.rows(),
+                    sinks_l,
+                    &mut self.spares,
+                );
+                closed.extend(closed_l);
+                for o in left_l {
+                    self.spares.give(o);
+                }
+                for (si, cap) in caps_l {
+                    layer_caps[si].push(cap);
+                }
+                for (si, r) in rows_l.into_iter().flatten() {
+                    match r {
+                        Ok(o) => per_spec_rows[si].push(o),
+                        Err(e) => {
+                            drop(layer_work);
+                            forget(&mut self.states, &mut self.resolvers, &fresh);
+                            refits_before.restore(
+                                &mut self.refit_reserved,
+                                &mut self.refit_noticed,
+                                &mut self.notices,
+                            );
+                            self.broken = Some(e.to_string());
+                            return Err(e);
+                        }
+                    }
+                }
+                if li == 0 && std::mem::take(&mut self.fail_after_learning) {
+                    drop(layer_work);
+                    return Err(polars_err!(ComputeError:
+                        "bank: a failure after learning, which a test asked for. Turn off \
+                         fail_next_call_after_learning to learn without it."
+                    ));
+                }
+                t_process += t_layer.elapsed();
+                let t_asm = std::time::Instant::now();
+                finish_sinks(filled_l, &mut out)?;
+                t_assemble += t_asm.elapsed();
+            } else {
+                t_process += t_layer.elapsed();
+            }
+            // Scatter parent captures into chunk-order buffers before downstream
+            // layers run (even on 0-row chunks so downstream always finds Some).
+            for &si in layer_specs {
+                if derived[si].is_prior_parent {
+                    let width =
+                        specs[si].m() * (specs[si].k() + usize::from(specs[si].fit_intercept));
+                    parent_priors[si] =
+                        Some(prior::scatter_parent_captures(&layer_caps[si], n, width));
+                }
+            }
+            let t_asm = std::time::Instant::now();
+            assemble_phase(
+                specs,
+                derived,
+                n,
+                &mut per_spec_rows,
+                &mut out,
+                clock_dtypes,
+                |si| layer_of[si] == li,
+                &mut self.spares,
+            )?;
+            t_assemble += t_asm.elapsed();
         }
-        // Assembled whether or not a row reached them, as the first phase's
-        // are: a chunk of no rows has no work for a grouped spec, and a
-        // comparison left out of the assembly panicked below ("every spec is
-        // assembled"; found by the dry run's frame of no rows, review round
-        // 4, SF2).
-        let t5 = std::time::Instant::now();
-        assemble_phase(
-            specs,
-            derived,
-            n,
-            &mut per_spec_rows,
-            &mut out,
-            clock_dtypes,
-            |si| derived[si].compare.is_some(),
-            &mut self.spares,
-        )?;
-        t_assemble += t5.elapsed();
+        let _ = t2;
         // The readiness notices the chunk raised (docs/WARMUP-AND-CONVERGENCE.md
         // §3), each once per (spec, group, instance), named by both, for
         // the caller to surface as it sees fit -- a warning in Python, a
@@ -4208,66 +4260,85 @@ impl Bank {
         let specs = &self.specs;
         let derived = &self.derived;
         let cfgs = &self.clock_cfgs;
-        let mut work: Vec<(usize, &[usize], usize, &Stream)> = Vec::new();
-        for (si, hm) in self.states.iter().enumerate() {
-            let mut base = 0;
-            for (key, idx) in groups[si].iter() {
-                if let Some(at) = place_of(hm, key) {
-                    work.push((si, idx, base, &hm[at]));
-                }
-                base += idx.len();
+        let mut layer_of = vec![0usize; specs.len()];
+        for (li, layer) in self.layers.iter().enumerate() {
+            for &si in layer {
+                layer_of[si] = li;
             }
         }
-        work.sort_by_key(|(_, idx, _, _)| std::cmp::Reverse(idx.len()));
-        // The same two phases as `fit_predict`: a comparison scores the
-        // residuals its two sides report for this chunk.
-        let (work2, work1): (Vec<_>, Vec<_>) = work
-            .into_iter()
-            .partition(|(si, ..)| derived[*si].compare.is_some());
         let mut out: Vec<Option<StructArray>> = specs.iter().map(|_| None).collect();
         let mut per_spec_rows: Vec<Vec<Box<ChunkOut>>> =
             (0..specs.len()).map(|_| Vec::new()).collect();
+        let mut parent_live_pre: Vec<Option<Vec<f64>>> = (0..specs.len()).map(|_| None).collect();
         // Scoring keeps no run buffers between calls: these go when it ends.
         let mut spares = Spares::default();
-        for (si, r) in score(work1, specs, cfgs, &cols) {
-            per_spec_rows[si].push(r?);
-        }
-        assemble_phase(
-            specs,
-            derived,
-            n,
-            &mut per_spec_rows,
-            &mut out,
-            &clock_dtypes,
-            |si| derived[si].compare.is_none(),
-            &mut spares,
-        )?;
-        if !work2.is_empty() {
-            for (si, d) in derived.iter().enumerate() {
-                if let Some(ab) = d.compare {
+
+        for (li, layer_specs) in self.layers.iter().enumerate() {
+            for &si in layer_specs {
+                if let Some(ab) = derived[si].compare {
                     cols[si].targets = compare_targets(&specs[si], ab, &out, layouts[si])?;
                 }
+                if let Some(pi) = derived[si].prior_parent {
+                    let pre_c = parent_live_pre[pi]
+                        .as_ref()
+                        .expect("parent spec scored in an earlier topological layer");
+                    let width =
+                        specs[si].m() * (specs[si].k() + usize::from(specs[si].fit_intercept));
+                    cols[si].prior = Some(prior::gather_prior_rows(pre_c, &[], width, layouts[si]));
+                }
             }
-            for (si, r) in score(work2, specs, cfgs, &cols) {
-                per_spec_rows[si].push(r?);
+            let mut work_l: Vec<(usize, &[usize], usize, ScoreStream<'_>)> = Vec::new();
+            for &si in layer_specs {
+                let hm = &self.states[si];
+                let mut base = 0;
+                for (key, idx) in groups[si].iter() {
+                    if let Some(at) = place_of(hm, key) {
+                        work_l.push((si, idx, base, ScoreStream::Live(&hm[at])));
+                    } else if derived[si].prior_parent.is_some() {
+                        // Unseen cold-start child group borrows live parent
+                        // coefficients without mutating bank state.
+                        let owned = key.to_key();
+                        let fresh = Stream::new_for(
+                            &specs[si],
+                            crate::stream::draw_group_hash(&specs[si], &owned),
+                        )
+                        .map_err(|e| polars_err!(ComputeError: "{}", e))?;
+                        work_l.push((si, idx, base, ScoreStream::Fresh(Box::new(fresh))));
+                    }
+                    base += idx.len();
+                }
+            }
+            work_l.sort_by_key(|(_, idx, _, _)| std::cmp::Reverse(idx.len()));
+            if !work_l.is_empty() {
+                for (si, r) in score(work_l, specs, cfgs, &cols) {
+                    per_spec_rows[si].push(r?);
+                }
+            }
+            assemble_phase(
+                specs,
+                derived,
+                n,
+                &mut per_spec_rows,
+                &mut out,
+                &clock_dtypes,
+                |si| layer_of[si] == li,
+                &mut spares,
+            )?;
+            for &si in layer_specs {
+                if derived[si].is_prior_parent {
+                    parent_live_pre[si] = Some(prior::collect_live_parent_prior(
+                        &specs[si],
+                        &self.states[si],
+                        &groups[si],
+                        cols[si].prior.as_ref(),
+                        n,
+                    ));
+                }
             }
         }
-        // Whether or not a stream scored, as in `fit_predict`: a fresh bank,
-        // a chunk of unseen groups or of no rows has no work for a
-        // comparison, and it panicked below (review round 4, SF2).
-        assemble_phase(
-            specs,
-            derived,
-            n,
-            &mut per_spec_rows,
-            &mut out,
-            &clock_dtypes,
-            |si| derived[si].compare.is_some(),
-            &mut spares,
-        )?;
         Ok(out
             .into_iter()
-            .map(|c| c.expect("every spec is assembled in one of the two phases"))
+            .map(|c| c.expect("every spec is assembled in one of the topological layers"))
             .collect())
     }
 
@@ -4952,6 +5023,7 @@ use arrays::{coef_list_array, named_column, named_columns, opt_bool_array, opt_f
 
 mod assembly;
 mod groups;
+mod prior;
 use assembly::{Sink, assemble};
 use groups::{Groups, KeyRef, group_indices};
 

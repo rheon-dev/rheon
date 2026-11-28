@@ -718,6 +718,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/bank/dependence.rs"]
 
+[messages."crates/rheon-polars/src/bank/prior.rs"]
+
 [messages."crates/rheon-polars/src/bank/smoothed.rs"]
 
 [messages."crates/rheon-polars/src/bank/vector_ar.rs"]
@@ -956,6 +958,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/bank/closed_rows.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/bank/dependence.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/bank/prior.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/bank/smoothed.rs#messages"]
 

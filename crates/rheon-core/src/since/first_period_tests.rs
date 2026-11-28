@@ -69,6 +69,8 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 max_rows_between_snapshots: None,
                 constraints: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             m.set_min_weight_output_only(true);

@@ -50,6 +50,8 @@ fn cfg(k: usize, shape: (bool, bool, bool), sets: bool, window: Option<f64>) -> 
         max_rows_between_snapshots: None,
         constraints: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 
@@ -263,6 +265,9 @@ fn parts_with(back: usize) -> Solved {
         shift: 0.0,
         scale: 1.0,
         ill: false,
+        intercept_weight: None,
+        edf0: None,
+        lam_intercept: None,
     }
 }
 

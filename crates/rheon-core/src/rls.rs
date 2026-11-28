@@ -1578,6 +1578,8 @@ mod tests {
             max_rows_between_snapshots: None,
             constraints: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
 
@@ -1633,6 +1635,8 @@ mod tests {
             max_rows_between_snapshots: None,
             constraints: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         };
         let mut own = EwRidge::new(cfg.clone()).unwrap();
         let mut pairwise = EwRidge::new(EwRidgeCfg {
@@ -1706,6 +1710,8 @@ mod tests {
             max_rows_between_snapshots: None,
             constraints: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
 

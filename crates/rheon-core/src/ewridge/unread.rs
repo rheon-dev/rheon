@@ -137,11 +137,15 @@ impl EwRidge {
     /// `F`: the least of the floors a read of the fit uses (the module docs,
     /// item 1) -- `k_total`, `min_weight` and each target's own threshold.
     pub(super) fn unread_floor(&self) -> f64 {
-        let k = self.cfg.k_total() as f64;
+        let own = if self.cfg.prior_weight.is_some() && self.cfg.constraint.is_none() {
+            0.0
+        } else {
+            self.cfg.k_total() as f64
+        };
         self.target_min_weight
             .iter()
             .copied()
-            .fold(self.cfg.min_weight.min(k), f64::min)
+            .fold(self.cfg.min_weight.min(own), f64::min)
     }
 
     /// Whether the solve due on this row, not one its explicit cadence

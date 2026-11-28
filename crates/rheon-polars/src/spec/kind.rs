@@ -222,6 +222,57 @@ impl ModelKind {
         )
     }
 
+    /// True for the linear feature-regression models whose `coef` output is a
+    /// `[intercept?, f_0, ..., f_{k-1}]` vector per target in original units,
+    /// eligible as a `prior_from` parent for `ewridge`.
+    pub fn has_linear_feature_coef(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwRidge { .. }
+                | ModelKind::Rls { .. }
+                | ModelKind::Lasso { .. }
+                | ModelKind::Kalman { .. }
+                | ModelKind::Huber { .. }
+                | ModelKind::Quantile { .. }
+                | ModelKind::Ftrl { .. }
+                | ModelKind::Sgd { .. }
+                | ModelKind::Pa { .. }
+                | ModelKind::Glm { .. }
+                | ModelKind::Expectile { .. }
+        )
+    }
+
+    /// Parent spec name when this spec shrinks toward another spec via `prior_from`.
+    pub fn prior_from(&self) -> Option<&str> {
+        match self {
+            ModelKind::EwRidge { prior_from, .. } => prior_from.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Dynamic `coef_prior` column name when `ewridge` reads a `List(Float64)` column.
+    pub fn coef_prior_column(&self) -> Option<&str> {
+        match self {
+            ModelKind::EwRidge { coef_prior, .. } => {
+                coef_prior.as_ref().and_then(super::CoefPrior::as_column)
+            }
+            _ => None,
+        }
+    }
+
+    /// Positive shrinkage weight toward a dynamic parent or column prior, if active.
+    pub fn prior_weight(&self) -> Option<f64> {
+        match self {
+            ModelKind::EwRidge { prior_weight, .. } => *prior_weight,
+            _ => None,
+        }
+    }
+
+    /// Whether this spec shrinks toward a dynamic prior (`prior_from` or column `coef_prior`).
+    pub fn has_dynamic_prior(&self) -> bool {
+        self.prior_weight().is_some()
+    }
+
     /// `gram_threads` as the spec gives it, for the two kinds that take it
     /// (docs/PLAN.md task 225); `None` for every other kind.
     pub fn gram_threads_given(&self) -> Option<GramThreads> {

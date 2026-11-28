@@ -309,6 +309,10 @@ def _spec_columns(specs: Iterable[dict[str, Any]]) -> set[str]:
         label = spec.get("label_clock")
         if label is not None:
             cols.update([label] if isinstance(label, str) else label)
+        # Dynamic `coef_prior` column on `ewridge` when passed as a column name.
+        model = spec.get("model")
+        if isinstance(model, dict) and isinstance(model.get("coef_prior"), str):
+            cols.add(model["coef_prior"])
     return cols
 
 

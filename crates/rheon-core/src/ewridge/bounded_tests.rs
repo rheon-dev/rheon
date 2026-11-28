@@ -38,6 +38,8 @@ fn base_cfg(k: usize, m: usize, constraint: Constraint) -> EwRidgeCfg {
         max_rows_between_snapshots: None,
         constraints: None,
         constraint: Some(constraint),
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 

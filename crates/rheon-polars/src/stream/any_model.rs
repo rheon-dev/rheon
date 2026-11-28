@@ -130,6 +130,76 @@ impl AnyModel {
         }
     }
 
+    /// Arm per-step pre/post dynamic priors on an `ewridge` model.
+    pub fn set_step_priors_flat(&mut self, pre: Option<&[f64]>, post: Option<&[f64]>) {
+        if let AnyModel::EwRidge(m) = self {
+            m.set_step_priors_flat(pre, post);
+        }
+    }
+
+    /// Clear any armed per-step dynamic priors on an `ewridge` model.
+    pub fn clear_step_priors(&mut self) {
+        if let AnyModel::EwRidge(m) = self {
+            m.clear_step_priors();
+        }
+    }
+
+    /// `&self` prediction with an optional cold-start `prior_pre` slice for
+    /// `ewridge` scoring (`Bank::predict`); delegates to `predict_at_into`
+    /// elsewhere.
+    pub fn predict_at_with_prior_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        stamp: Option<Stamp>,
+        prior_pre: Option<&[f64]>,
+        out: &mut rheon_core::Step,
+    ) {
+        if let (AnyModel::EwRidge(m), Some(pre)) = (self, prior_pre) {
+            m.predict_with_prior_into(x, d_clock, Some(pre), out);
+        } else {
+            self.predict_at_into(x, y, d_clock, stamp, out);
+        }
+    }
+
+    /// `&self` error-inflation gate with an optional cold-start `prior_pre`
+    /// slice for `ewridge` scoring (`Bank::predict`).
+    pub fn error_inflation_gate_with_prior_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        prior_pre: Option<&[f64]>,
+        out: &mut Vec<f64>,
+        limit: f64,
+    ) -> bool {
+        if let (AnyModel::EwRidge(m), Some(pre)) = (self, prior_pre) {
+            if m.cfg().constraint.is_some() {
+                out.clear();
+                return false;
+            }
+            m.inflation_with_prior_into(Some(pre), out, limit)
+        } else {
+            self.error_inflation_gate_into(x, d_clock, out, limit)
+        }
+    }
+
+    /// `&self` per-row error inflation with an optional cold-start `prior_pre`
+    /// slice for `ewridge` scoring (`Bank::predict`).
+    pub fn row_error_inflation_with_prior_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        prior_pre: Option<&[f64]>,
+        out: &mut Vec<f64>,
+    ) -> bool {
+        if let (AnyModel::EwRidge(m), Some(pre)) = (self, prior_pre) {
+            m.row_error_inflation_with_prior_into(x, d_clock, Some(pre), out)
+        } else {
+            self.row_error_inflation_into(x, d_clock, out)
+        }
+    }
+
     pub fn step(
         &mut self,
         x: &[f64],

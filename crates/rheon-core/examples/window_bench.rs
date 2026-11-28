@@ -39,6 +39,8 @@ fn ridge(k: usize, window: Option<f64>) -> EwRidgeCfg {
         max_rows_between_snapshots: window.map(|_| 25),
         constraints: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 

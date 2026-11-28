@@ -239,6 +239,18 @@ pub struct EwRidgeCfg {
     /// intercept). Refused beside `constraints` and `feature_sets`.
     #[serde(default)]
     pub constraint: Option<Constraint>,
+    /// Positive finite shrinkage weight (sum-scale pseudo-observation count)
+    /// pulling coefficients toward a dynamic parent/column prior.
+    #[serde(default)]
+    pub prior_weight: Option<f64>,
+    /// Whether `prior_weight` pools the intercept alongside the slopes
+    /// (default `true`).
+    #[serde(default = "default_true")]
+    pub prior_include_intercept: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Serialize for EwRidgeCfg {
@@ -250,7 +262,9 @@ impl Serialize for EwRidgeCfg {
                 crate::humanfloat::f64_or_tag::serialize(&self.0, s)
             }
         }
-        let len = if self.constraint.is_some() {
+        let len = if self.prior_weight.is_some() || !self.prior_include_intercept {
+            24
+        } else if self.constraint.is_some() {
             22
         } else if self.constraints.is_some() {
             21
@@ -290,6 +304,10 @@ impl Serialize for EwRidgeCfg {
         }
         if len >= 22 {
             st.serialize_field("constraint", &self.constraint)?;
+        }
+        if len >= 24 {
+            st.serialize_field("prior_weight", &self.prior_weight)?;
+            st.serialize_field("prior_include_intercept", &self.prior_include_intercept)?;
         }
         st.end()
     }
@@ -573,11 +591,42 @@ impl EwRidgeCfg {
                 );
             }
         }
+        if let Some(pw) = self.prior_weight {
+            if !(pw.is_finite() && pw > 0.0) {
+                no.refuse(format!(
+                    "ewridge: prior_weight must be finite and above 0, but it is {pw}. Set \
+                     prior_weight to a positive pseudo-observation count, or leave it out."
+                ));
+            }
+            if !self.feature_sets.is_empty() {
+                no.refuse(
+                    "ewridge: prior_weight cannot be combined with feature_sets: each feature \
+                     set drops a different subset of columns, so one parent coefficient vector \
+                     cannot apply to every subset. Leave out feature_sets, or leave out \
+                     prior_weight.",
+                );
+            }
+        }
+        if !self.prior_include_intercept {
+            if self.prior_weight.is_none() {
+                no.refuse(
+                    "ewridge: prior_include_intercept=False has no effect without prior_weight. \
+                     Leave prior_include_intercept at True, or set prior_weight.",
+                );
+            }
+            if !self.fit_intercept {
+                no.refuse(
+                    "ewridge: prior_include_intercept=False requires fit_intercept=True, because \
+                     there is no intercept to exclude from the prior. Leave \
+                     prior_include_intercept at True, or set fit_intercept=True.",
+                );
+            }
+        }
         no.finish()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwRidge {
     cfg: EwRidgeCfg,
     /// The Grams, and per target its weight, centred cross-moments and
@@ -658,6 +707,12 @@ pub struct EwRidge {
     /// type: boolean, expected f64" is what that looks like.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     win: Option<Windowed>,
+    /// Latest causal dynamic prior coefficients per target (`n_targets` x
+    /// `k_total`, in original units), persisted so resuming mid-stream matches
+    /// an uninterrupted run to the bit. Trailing optional field: omitted when
+    /// `None` so pre-existing states keep byte-identical serialization.
+    #[serde(default)]
+    dynamic_prior: Option<Fit<Vec<Vec<f64>>>>,
     // scratch buffers (serialized for simplicity; tiny)
     #[serde(skip)]
     zbuf: Vec<f64>,
@@ -683,6 +738,79 @@ pub struct EwRidge {
     /// each step it applies to, and the step clears it.
     #[serde(skip)]
     residual_held: ResidualHeld,
+    /// Transient per-step pre/post dynamic priors armed by the stream layer
+    /// before a step and cleared after it. Not state.
+    #[serde(skip)]
+    step_prior: StepPrior,
+}
+
+impl Serialize for EwRidge {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        struct Settled<'a>(&'a Readiness);
+        impl Serialize for Settled<'_> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                serialize_settled(self.0, s)
+            }
+        }
+        let len = if self.dynamic_prior.is_some() {
+            17
+        } else if self.win.is_some() {
+            16
+        } else {
+            15
+        };
+        let mut st = serializer.serialize_struct("EwRidge", len)?;
+        st.serialize_field("cfg", &self.cfg)?;
+        st.serialize_field("acc", &self.acc)?;
+        st.serialize_field("wsig", &self.wsig)?;
+        st.serialize_field("sig2", &self.sig2)?;
+        st.serialize_field("beta", &self.beta)?;
+        st.serialize_field("slow", &self.slow)?;
+        st.serialize_field("since_solve", &self.since_solve)?;
+        st.serialize_field("rows_since_solve", &self.rows_since_solve)?;
+        st.serialize_field("weight_since_solve", &self.weight_since_solve)?;
+        st.serialize_field("solve_failures", &self.solve_failures)?;
+        st.serialize_field("ready", &Settled(&self.ready))?;
+        st.serialize_field("keep_factor", &self.keep_factor)?;
+        st.serialize_field("target_min_weight", &self.target_min_weight)?;
+        st.serialize_field("min_weight_output_only", &self.min_weight_output_only)?;
+        st.serialize_field("first_period_by_share", &self.first_period_by_share)?;
+        if len >= 16 {
+            st.serialize_field("win", &self.win)?;
+        }
+        if len >= 17 {
+            st.serialize_field("dynamic_prior", &self.dynamic_prior)?;
+        }
+        st.end()
+    }
+}
+
+/// Transient per-step dynamic priors armed by the caller before a row's
+/// readiness checks and step: not state, so copies start empty and two models
+/// compare equal regardless of its contents.
+#[derive(Debug, Default)]
+struct StepPrior {
+    /// Whether `pre` was explicitly supplied for this step (distinguishing an
+    /// explicit `prior_from` pre-row slice from an unset direct Rust call).
+    has_pre: bool,
+    pre: Vec<f64>,
+    /// Whether `post` was armed for this step (committed into `dynamic_prior`
+    /// only after `weight > 0` passes).
+    has_post: bool,
+    post: Vec<f64>,
+}
+
+impl Clone for StepPrior {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for StepPrior {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// A count of solves that is not state: a load starts it at 0, and two
@@ -869,6 +997,7 @@ impl EwRidge {
             weight_since_solve: 0.0,
             solve_failures: 0,
             win,
+            dynamic_prior: None,
             zbuf: vec![0.0; k_total],
             ready: Readiness::default(),
             keep_factor: false,
@@ -880,8 +1009,118 @@ impl EwRidge {
             spare_fit: crate::window::Kept::default(),
             solves: SolveCount::default(),
             residual_held: ResidualHeld::default(),
+            step_prior: StepPrior::default(),
             cfg,
         })
+    }
+
+    /// Set or clear the dynamic prior coefficients (`n_targets` x `k_total`,
+    /// in original units) used when `prior_weight` is configured.
+    pub fn set_dynamic_prior(&mut self, prior: Option<Vec<Vec<f64>>>) -> Result<(), String> {
+        let Some(p) = prior else {
+            self.dynamic_prior = None;
+            return Ok(());
+        };
+        if self.cfg.prior_weight.is_none() {
+            return Err(
+                "ewridge: cannot set a dynamic prior without prior_weight configured. Set \
+                 prior_weight to a positive finite number first."
+                    .into(),
+            );
+        }
+        let (m, k) = (self.cfg.n_targets, self.cfg.k_total());
+        if p.len() != m || p.iter().any(|v| v.len() != k) {
+            return Err(format!(
+                "ewridge: dynamic prior has the wrong shape for {m} targets and {k} coefficients. \
+                 Pass {m} vectors, each of length {k}."
+            ));
+        }
+        self.dynamic_prior = Some(Fit(p));
+        Ok(())
+    }
+
+    /// Update the persisted dynamic prior from a flat `n_targets * k_total`
+    /// slice (or clear when `None`), reusing existing storage.
+    pub fn set_dynamic_prior_flat(&mut self, flat: Option<&[f64]>) {
+        let (m, k) = (self.cfg.n_targets, self.cfg.k_total());
+        let Some(flat) = flat else {
+            self.dynamic_prior = None;
+            return;
+        };
+        debug_assert_eq!(flat.len(), m * k);
+        if flat.len() != m * k {
+            return;
+        }
+        let dst = self
+            .dynamic_prior
+            .get_or_insert_with(|| Fit(Vec::with_capacity(m)));
+        dst.0.resize_with(m, Vec::new);
+        for (j, row) in dst.0.iter_mut().enumerate() {
+            row.clear();
+            row.extend_from_slice(&flat[j * k..(j + 1) * k]);
+        }
+    }
+
+    /// Current persisted dynamic prior coefficients per target, if any.
+    pub fn dynamic_prior(&self) -> Option<&[Vec<f64>]> {
+        self.dynamic_prior.as_deref().map(Vec::as_slice)
+    }
+
+    /// Arm transient per-step pre/post dynamic prior slices (`n_targets * k_total`)
+    /// before calling readiness gates and `step_into`. `pre` is used only for
+    /// cold-start (`W_j == 0`) reads before the row is learned; `post` is
+    /// committed into `dynamic_prior` only if the row has positive weight
+    /// (preserving zero-weight immutability).
+    pub fn set_step_priors_flat(&mut self, pre: Option<&[f64]>, post: Option<&[f64]>) {
+        let expected = self.cfg.n_targets * self.cfg.k_total();
+        match pre {
+            Some(s) if s.len() == expected => {
+                self.step_prior.has_pre = true;
+                self.step_prior.pre.clear();
+                self.step_prior.pre.extend_from_slice(s);
+            }
+            _ => {
+                self.step_prior.has_pre = false;
+                self.step_prior.pre.clear();
+            }
+        }
+        match post {
+            Some(s) if s.len() == expected => {
+                self.step_prior.has_post = true;
+                self.step_prior.post.clear();
+                self.step_prior.post.extend_from_slice(s);
+            }
+            _ => {
+                self.step_prior.has_post = false;
+                self.step_prior.post.clear();
+            }
+        }
+    }
+
+    /// Clear any armed per-step dynamic prior slices.
+    pub fn clear_step_priors(&mut self) {
+        self.step_prior.has_pre = false;
+        self.step_prior.pre.clear();
+        self.step_prior.has_post = false;
+        self.step_prior.post.clear();
+    }
+
+    /// Resolve target `j`'s cold-start prior vector (`k_total` finite floats)
+    /// from an explicit override `prior_pre`, an armed `step_prior.pre`, or
+    /// the persisted `dynamic_prior` (never falling back to stale state when
+    /// an explicit `prior_from` pre-row slice was supplied).
+    fn cold_prior_for<'a>(&'a self, prior_pre: Option<&'a [f64]>, j: usize) -> Option<&'a [f64]> {
+        if self.cfg.prior_weight.is_none() || !self.cold_start_identified() {
+            return None;
+        }
+        let k = self.cfg.k_total();
+        if let Some(flat) = prior_pre {
+            return prior::valid_flat_prior_of(Some(flat), j, k);
+        }
+        if self.step_prior.has_pre {
+            return prior::valid_flat_prior_of(Some(self.step_prior.pre.as_slice()), j, k);
+        }
+        prior::valid_prior_of(self.dynamic_prior.as_deref().map(Vec::as_slice), j, k)
     }
 
     /// The solves run since the model was built or loaded: a step that
@@ -951,7 +1190,12 @@ impl EwRidge {
     /// threshold itself otherwise.
     fn capped(&self, threshold: f64) -> f64 {
         if self.min_weight_output_only {
-            threshold.min(self.cfg.k_total() as f64)
+            let own = if self.cfg.prior_weight.is_some() && self.cfg.constraint.is_none() {
+                0.0
+            } else {
+                self.cfg.k_total() as f64
+            };
+            threshold.min(own)
         } else {
             threshold
         }
@@ -1338,14 +1582,28 @@ impl EwRidge {
             return;
         }
         let mut failures = 0u64;
-        let (grams, cross) = match view.as_ref() {
-            Some(v) => (v.acc.grams.as_slice(), &v.acc.cross),
-            None => (self.acc.grams.grams.as_slice(), &self.acc.cross),
+        let (grams, cross, wj_view) = match view.as_ref() {
+            Some(v) => (v.acc.grams.as_slice(), &v.acc.cross, v.acc.wj.as_slice()),
+            None => (
+                self.acc.grams.grams.as_slice(),
+                &self.acc.cross,
+                self.acc.wj.as_slice(),
+            ),
         };
-        let n_systems = grams.len() * nc;
-        ready.systems.resize(n_systems, None);
-        factors.resize(n_systems, None);
-        factor_projs.resize(n_systems, None);
+        let has_prior_cfg = self.cfg.prior_weight.is_some();
+        let mut next_sys = 0usize;
+        if has_prior_cfg {
+            for old in factors.drain(..).flatten() {
+                work.give(old);
+            }
+            ready.systems.clear();
+            factor_projs.clear();
+        } else {
+            let n_systems = grams.len() * nc;
+            ready.systems.resize(n_systems, None);
+            factors.resize(n_systems, None);
+            factor_projs.resize(n_systems, None);
+        }
         // With an intercept the slopes are solved on the centred system (see
         // the module docs). The rest read the raw normal equations and need
         // the uncentred cross-moments: `ridge_scale`, whose intercept is
@@ -1353,18 +1611,135 @@ impl EwRidge {
         // and the two solves through the origin, which centre nothing.
         let centred = self.cfg.fit_intercept && !self.cfg.ridge_scale;
 
+        // Helper closure-style macro/function for recording one solved system
+        // into `beta`, `ready`, `factors`, and `factor_projs`.
+        macro_rules! record_solved {
+            ($solved:expr, $sub_readers:expr, $ci:expr, $at:expr) => {{
+                let solved: Option<Solved> = $solved;
+                let sub_readers: &[usize] = $sub_readers;
+                let ci: usize = $ci;
+                let at: usize = $at;
+                let kc = zidx.len();
+                if solved.as_ref().is_some_and(|s| s.ill) {
+                    for &j in sub_readers.iter() {
+                        let slot = j * nc + ci;
+                        beta[slot].fill(f64::NAN);
+                        ready.clear(slot, &mut work);
+                        ready.system_of[slot] = at;
+                    }
+                    if keep_factor {
+                        ready.systems[at] = None;
+                        factor_projs[at] = None;
+                        if let Some(old) = factors[at].take() {
+                            work.give(old);
+                        }
+                    }
+                    if let Some(mut solved) = solved {
+                        if let Some(f) = solved.factor.take() {
+                            work.give(f);
+                        }
+                        parts.reclaim(solved);
+                    }
+                } else if let Some(mut solved) = solved {
+                    for (jj, &j) in sub_readers.iter().enumerate() {
+                        for (ai, &zi) in zidx.iter().enumerate() {
+                            beta[j * nc + ci][zi] = solved.sol[jj * kc + ai];
+                        }
+                    }
+                    let is_intercept = |pos: usize| self.cfg.fit_intercept && pos == 0;
+                    sup0.clear();
+                    sup0.resize(k_total, f64::NAN);
+                    for (pos, &zi) in zidx.iter().enumerate() {
+                        if !is_intercept(pos) {
+                            sup0[zi] = 0.0;
+                        }
+                    }
+                    let edf0 = solved
+                        .edf0
+                        .unwrap_or_else(|| if solved.centred { 1.0 } else { 0.0 });
+                    let factor = solved.factor.take();
+                    let proj = solved.proj.take().map(Arc::new);
+                    let kept = if keep_factor {
+                        factor.as_ref().map(|f| work.copy(f))
+                    } else {
+                        None
+                    };
+                    let pending = factor.map(|factor| {
+                        let lam = solved.shift + factor.jitter();
+                        let lam_int = solved.lam_intercept.map(|l0| l0 + factor.jitter());
+                        ready.spare.get().pending(
+                            factor,
+                            lam,
+                            lam_int,
+                            solved
+                                .keep
+                                .iter()
+                                .map(|&pos| (!is_intercept(pos)).then(|| zidx[pos])),
+                            edf0,
+                            sup0.as_slice(),
+                            proj.clone(),
+                            cert,
+                        )
+                    });
+                    for &j in sub_readers.iter() {
+                        let slot = j * nc + ci;
+                        match &pending {
+                            Some(p) => ready.set_pending(slot, Some(Arc::clone(p)), &mut work),
+                            None => {
+                                ready.edf[slot] = edf0;
+                                ready.support[slot].clone_from(&*sup0);
+                                ready.set_pending(slot, None, &mut work);
+                            }
+                        }
+                        ready.system_of[slot] = at;
+                    }
+                    if keep_factor {
+                        match &mut ready.systems[at] {
+                            Some(sys) => {
+                                sys.a.set_from_square(&solved.a);
+                                sys.z.clear();
+                                sys.z.extend(solved.keep.iter().map(|&p| zidx[p]));
+                                sys.s.clone_from(&solved.s);
+                                sys.mean.clone_from(&solved.mean);
+                                sys.centred = solved.centred;
+                                sys.scale = solved.scale;
+                                sys.intercept_weight = solved.intercept_weight;
+                            }
+                            none => {
+                                *none = Some(System {
+                                    a: solved.a.as_slice().to_vec().into(),
+                                    z: solved.keep.iter().map(|&p| zidx[p]).collect(),
+                                    s: solved.s.clone(),
+                                    mean: solved.mean.clone(),
+                                    centred: solved.centred,
+                                    scale: solved.scale,
+                                    intercept_weight: solved.intercept_weight,
+                                });
+                            }
+                        }
+                        factor_projs[at] = proj;
+                        if let Some(old) = std::mem::replace(&mut factors[at], kept) {
+                            work.give(old);
+                        }
+                    }
+                    parts.reclaim(solved);
+                } else if let Some(prev) = &self.beta {
+                    for &j in sub_readers.iter() {
+                        beta[j * nc + ci].clone_from(&prev[j * nc + ci]);
+                    }
+                } else {
+                    for &j in sub_readers.iter() {
+                        beta[j * nc + ci].fill(f64::NAN);
+                    }
+                }
+            }};
+        }
+
         // One system per Gram, for the targets that read it.
         for (g, cov) in grams.iter().enumerate() {
             self.acc.grams.readers_into(g, readers);
-            // Whether the centred solve may read this Gram's system as a
-            // ridge over semidefinite co-moments: a live one, built row by
-            // row since it was empty or merged block by block -- not a
-            // window's truncation, not one `session_shrink`'s blend
-            // rewrites (the condition module's docs, *The ridge's
-            // shortcut*).
             let over_moments = view.is_none() && self.slow.is_none();
             let mr = readers.len();
-            // The uncentred right-hand sides, formed only where they are read.
             if !centred {
                 r.resize_with(mr, Vec::new);
                 for (rj, &j) in r.iter_mut().zip(readers.iter()) {
@@ -1373,18 +1748,180 @@ impl EwRidge {
             }
             for (ci, &(fs_idx, r_idx)) in combos.iter().enumerate() {
                 let ridge = self.cfg.ridge[r_idx];
-                // A Gram with no weight and no penalty has no system to
-                // solve: under `own_rows` a target not seen yet is alone in
-                // one, and its slots have no fit, NaN. They kept zeros --
-                // what the jittered solve of an empty matrix gave, at one
-                // counted failure a solve -- until review round 4 (CC1).
-                // With a penalty the fit is the prior, `coef_prior` or zero,
-                // and is solved; a target with no weight keeps that fit only
-                // where a solve fit it before or the caller gave the prior
-                // (below). No system, so no
-                // readiness shares either: the last solve's stood beside the
-                // zeros, a share of data under no fit (review 2026-10-05,
-                // CA6).
+                if has_prior_cfg {
+                    // Split readers into those with a valid finite dynamic
+                    // prior and those without (warming / missing parent).
+                    let dyn_priors = self.dynamic_prior.as_deref().map(Vec::as_slice);
+                    let mut no_prior_idx: Vec<usize> = Vec::new();
+                    let mut with_prior_idx: Vec<usize> = Vec::new();
+                    for (jj, &j) in readers.iter().enumerate() {
+                        if prior::valid_prior_of(dyn_priors, j, k_total).is_some() {
+                            with_prior_idx.push(jj);
+                        } else {
+                            no_prior_idx.push(jj);
+                        }
+                    }
+                    self.combo_z_indices_into(fs_idx, zidx);
+                    let kc = zidx.len();
+
+                    // 1. Readers without a valid dynamic prior use the
+                    // standard unpriorized solve path.
+                    if !no_prior_idx.is_empty() {
+                        let sub_readers: Vec<usize> =
+                            no_prior_idx.iter().map(|&jj| readers[jj]).collect();
+                        if ridge == 0.0 && cov.n_eff() <= 0.0 {
+                            for &j in &sub_readers {
+                                beta[j * nc + ci].fill(f64::NAN);
+                                ready.clear(j * nc + ci, &mut work);
+                            }
+                        } else if let Some(con) = &self.cfg.constraint {
+                            let sub_r: Vec<Vec<f64>> = if centred {
+                                Vec::new()
+                            } else {
+                                no_prior_idx.iter().map(|&jj| r[jj].clone()).collect()
+                            };
+                            self.solve_bounded(
+                                cov,
+                                cross,
+                                &sub_readers,
+                                &sub_r,
+                                ci,
+                                nc,
+                                ridge,
+                                con,
+                                centred,
+                                &mut failures,
+                                parts,
+                                qp,
+                                &mut beta,
+                            );
+                            for &j in &sub_readers {
+                                ready.clear(j * nc + ci, &mut work);
+                            }
+                        } else {
+                            let at = next_sys;
+                            next_sys += 1;
+                            if keep_factor {
+                                ready.systems.push(None);
+                                factors.push(None);
+                                factor_projs.push(None);
+                            }
+                            let sub_r: Vec<Vec<f64>> = if centred {
+                                Vec::new()
+                            } else {
+                                no_prior_idx.iter().map(|&jj| r[jj].clone()).collect()
+                            };
+                            let solved = self.solve_standard_combo(
+                                cov,
+                                cross,
+                                &sub_readers,
+                                &sub_r,
+                                zidx,
+                                ridge,
+                                centred,
+                                over_moments,
+                                &mut failures,
+                                &mut work,
+                                parts,
+                            );
+                            record_solved!(solved, &sub_readers, ci, at);
+                        }
+                    }
+
+                    // 2. Readers with a valid finite dynamic prior.
+                    if !with_prior_idx.is_empty()
+                        && let Some(priors) = dyn_priors
+                    {
+                        if let Some(con) = &self.cfg.constraint {
+                            for &jj in &with_prior_idx {
+                                let j = readers[jj];
+                                let slot = j * nc + ci;
+                                let r_j: &[f64] = if centred { &[] } else { &r[jj] };
+                                self.solve_bounded_with_prior(
+                                    cov,
+                                    cross,
+                                    j,
+                                    wj_view[j],
+                                    r_j,
+                                    &priors[j],
+                                    slot,
+                                    ridge,
+                                    con,
+                                    centred,
+                                    &mut failures,
+                                    parts,
+                                    qp,
+                                    &mut beta[slot],
+                                );
+                                ready.clear(slot, &mut work);
+                            }
+                        } else {
+                            // Partition into subgroups sharing the same
+                            // `(wj, feature_means)` so targets on the same
+                            // rows still share one Cholesky factorization.
+                            let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
+                            let mut used = vec![false; with_prior_idx.len()];
+                            for a_pos in 0..with_prior_idx.len() {
+                                if used[a_pos] {
+                                    continue;
+                                }
+                                used[a_pos] = true;
+                                let jj0 = with_prior_idx[a_pos];
+                                let j0 = readers[jj0];
+                                let w0 = wj_view[j0];
+                                let mut sub_jj = vec![jj0];
+                                for b_pos in (a_pos + 1)..with_prior_idx.len() {
+                                    if used[b_pos] {
+                                        continue;
+                                    }
+                                    let jjb = with_prior_idx[b_pos];
+                                    let jb = readers[jjb];
+                                    if wj_view[jb].to_bits() == w0.to_bits()
+                                        && (!pairwise
+                                            || !centred
+                                            || same_bits(&cross.mj[j0], &cross.mj[jb]))
+                                    {
+                                        used[b_pos] = true;
+                                        sub_jj.push(jjb);
+                                    }
+                                }
+                                let sub_readers: Vec<usize> =
+                                    sub_jj.iter().map(|&jj| readers[jj]).collect();
+                                let sub_r: Vec<Vec<f64>> = if centred {
+                                    Vec::new()
+                                } else {
+                                    sub_jj.iter().map(|&jj| r[jj].clone()).collect()
+                                };
+                                let at = next_sys;
+                                next_sys += 1;
+                                if keep_factor {
+                                    ready.systems.push(None);
+                                    factors.push(None);
+                                    factor_projs.push(None);
+                                }
+                                let solved = self.solve_with_prior(
+                                    cov,
+                                    cross,
+                                    &sub_readers,
+                                    w0,
+                                    &sub_r,
+                                    priors,
+                                    &mut failures,
+                                    &mut work,
+                                    parts,
+                                    zidx,
+                                    ridge,
+                                    centred,
+                                );
+                                record_solved!(solved, &sub_readers, ci, at);
+                            }
+                        }
+                    }
+                    let _ = kc;
+                    continue;
+                }
+
+                // Standard path (no `prior_weight`): untouched.
                 if ridge == 0.0 && cov.n_eff() <= 0.0 {
                     for &j in readers.iter() {
                         beta[j * nc + ci].fill(f64::NAN);
@@ -1414,273 +1951,36 @@ impl EwRidge {
                     continue;
                 }
                 self.combo_z_indices_into(fs_idx, zidx);
-                let kc = zidx.len();
-
-                let solved: Option<Solved> = if centred {
-                    self.solve_centred(
-                        cov,
-                        cross,
-                        readers,
-                        &mut failures,
-                        &mut work,
-                        parts,
-                        zidx,
-                        ridge,
-                        over_moments,
-                    )
-                } else {
-                    // Gather the sub-block of S and the per-target rhs.
-                    parts.a.clear();
-                    parts.a.resize(kc * kc, 0.0);
-                    for (ai, &zi) in zidx.iter().enumerate() {
-                        for (aj, &zj) in zidx.iter().enumerate() {
-                            parts.a[ai * kc + aj] = cov.raw(zi, zj);
-                        }
-                    }
-                    parts.b.clear();
-                    parts.b.resize(kc * mr, 0.0);
-                    for (jj, rj) in r.iter().enumerate() {
-                        for (ai, &zi) in zidx.iter().enumerate() {
-                            parts.b[jj * kc + ai] = rj[zi];
-                        }
-                    }
-                    if self.cfg.ridge_scale {
-                        // (W S + prior_scale * ridge I) beta = W r  — intercept
-                        // penalized, `W` the Gram's weight: under `own_rows`
-                        // the target's own, so both sides are sums over its
-                        // rows.
-                        let w = cov.n_eff();
-                        let ps = cov.prior_scale();
-                        for i in 0..kc {
-                            for j in 0..kc {
-                                parts.a[i * kc + j] *= w;
-                            }
-                            parts.a[i * kc + i] += ps * ridge;
-                        }
-                        for v in parts.b.iter_mut() {
-                            *v *= w;
-                        }
-                        // Warm start: the prior enters on the same decaying sum
-                        // scale, so its weight falls away as data accumulates.
-                        if let Some(c0) = &self.cfg.coef_prior {
-                            for (jj, &j) in readers.iter().enumerate() {
-                                for (ai, &zi) in zidx.iter().enumerate() {
-                                    parts.b[jj * kc + ai] += ps * ridge * c0[j][zi];
-                                }
-                            }
-                        }
-                        // The system is on the sum scale, so a row form
-                        // against it is scaled back by `W` (see `System`).
-                        Self::solve_raw(
-                            &mut failures,
-                            &mut work,
-                            parts,
-                            kc,
-                            mr,
-                            ps * ridge,
-                            w,
-                            self.cfg.constraints.as_ref(),
-                            self.cfg.fit_intercept,
-                        )
-                    } else if !self.cfg.standardize {
-                        // Through the origin every slot is a slope, and every
-                        // slot is penalized.
-                        for i in 0..kc {
-                            parts.a[i * kc + i] += ridge;
-                        }
-                        // Warm prior: shrink toward coef_prior rather than
-                        // toward zero, by moving the penalty's target into the
-                        // right-hand side.
-                        if let Some(c0) = &self.cfg.coef_prior {
-                            for (jj, &j) in readers.iter().enumerate() {
-                                for (ai, &zi) in zidx.iter().enumerate() {
-                                    parts.b[jj * kc + ai] += ridge * c0[j][zi];
-                                }
-                            }
-                        }
-                        Self::solve_raw(
-                            &mut failures,
-                            &mut work,
-                            parts,
-                            kc,
-                            mr,
-                            ridge,
-                            1.0,
-                            self.cfg.constraints.as_ref(),
-                            false,
-                        )
-                    } else {
-                        Self::solve_scaled_through_origin(
-                            cov,
-                            &mut failures,
-                            &mut work,
-                            parts,
-                            zidx,
-                            readers,
-                            self.cfg.coef_prior.as_deref(),
-                            self.cfg.constraints.as_ref(),
-                            ridge,
-                        )
-                    }
-                };
-
-                if solved.as_ref().is_some_and(|s| s.ill) {
-                    // Past the condition at which the solve keeps a digit:
-                    // no fit, so no prediction and no readiness shares, as a
-                    // slot with no system has none -- but the slot names the
-                    // system it was solved from, which is how a withheld fit
-                    // is told from a missing one ([`EwRidge::ill_conditioned`])
-                    // with no field added to the state. No system is kept for
-                    // the leverage either: there is no fit to read it against.
-                    let at = g * nc + ci;
-                    for &j in readers.iter() {
-                        let slot = j * nc + ci;
-                        beta[slot].fill(f64::NAN);
-                        ready.clear(slot, &mut work);
-                        ready.system_of[slot] = at;
-                    }
-                    if keep_factor {
-                        ready.systems[at] = None;
-                        factor_projs[at] = None;
-                        if let Some(old) = factors[at].take() {
-                            work.give(old);
-                        }
-                    }
-                    if let Some(mut solved) = solved {
-                        if let Some(f) = solved.factor.take() {
-                            work.give(f);
-                        }
-                        parts.reclaim(solved);
-                    }
-                } else if let Some(mut solved) = solved {
-                    for (jj, &j) in readers.iter().enumerate() {
-                        for (ai, &zi) in zidx.iter().enumerate() {
-                            beta[j * nc + ci][zi] = solved.sol[jj * kc + ai];
-                        }
-                    }
-                    // What the readiness statistics read from this system
-                    // (docs/WARMUP-AND-CONVERGENCE.md §2.2): each kept
-                    // column's data share `1 − λ (A⁻¹)_jj`, with `λ` the
-                    // penalty on the diagonal plus the jitter the factor
-                    // needed, since that is what it carries; a column the
-                    // standardiser dropped has share 0; the intercept is not
-                    // a share. The effective degrees of freedom are the
-                    // shares summed, plus one for an eliminated intercept,
-                    // which the data alone determines. `A⁻¹`'s diagonal is
-                    // `O(k³)`, and a solve runs every few rows, so it is
-                    // taken when something reads it: a `coef` row, the
-                    // noise gate where its bound does not decide, `summary`,
-                    // a save, or the end of the stream's chunk (`Pending`;
-                    // docs/PLAN.md tasks 140 and 265).
-                    let is_intercept = |pos: usize| self.cfg.fit_intercept && pos == 0;
-                    sup0.clear();
-                    sup0.resize(k_total, f64::NAN);
-                    for (pos, &zi) in zidx.iter().enumerate() {
-                        if !is_intercept(pos) {
-                            sup0[zi] = 0.0;
-                        }
-                    }
-                    let edf0 = if solved.centred { 1.0 } else { 0.0 };
-                    let factor = solved.factor.take();
-                    let proj = solved.proj.take().map(Arc::new);
-                    let kept = if keep_factor {
-                        factor.as_ref().map(|f| work.copy(f))
-                    } else {
-                        None
-                    };
-                    let pending = factor.map(|factor| {
-                        let lam = solved.shift + factor.jitter();
-                        ready.spare.get().pending(
-                            factor,
-                            lam,
-                            solved
-                                .keep
-                                .iter()
-                                .map(|&pos| (!is_intercept(pos)).then(|| zidx[pos])),
-                            edf0,
-                            sup0.as_slice(),
-                            proj.clone(),
-                            cert,
-                        )
-                    });
-                    let at = g * nc + ci;
-                    for &j in readers.iter() {
-                        let slot = j * nc + ci;
-                        match &pending {
-                            Some(p) => ready.set_pending(slot, Some(Arc::clone(p)), &mut work),
-                            None => {
-                                ready.edf[slot] = edf0;
-                                ready.support[slot].clone_from(&*sup0);
-                                ready.set_pending(slot, None, &mut work);
-                            }
-                        }
-                        ready.system_of[slot] = at;
-                    }
-                    if keep_factor {
-                        // The system the last solve kept for this slot is
-                        // written over, its lists as they were.
-                        match &mut ready.systems[at] {
-                            Some(sys) => {
-                                sys.a.set_from_square(&solved.a);
-                                sys.z.clear();
-                                sys.z.extend(solved.keep.iter().map(|&p| zidx[p]));
-                                sys.s.clone_from(&solved.s);
-                                sys.mean.clone_from(&solved.mean);
-                                sys.centred = solved.centred;
-                                sys.scale = solved.scale;
-                            }
-                            none => {
-                                *none = Some(System {
-                                    a: solved.a.as_slice().to_vec().into(),
-                                    z: solved.keep.iter().map(|&p| zidx[p]).collect(),
-                                    s: solved.s.clone(),
-                                    mean: solved.mean.clone(),
-                                    centred: solved.centred,
-                                    scale: solved.scale,
-                                });
-                            }
-                        }
-                        factor_projs[at] = proj;
-                        if let Some(old) = std::mem::replace(&mut factors[at], kept) {
-                            work.give(old);
-                        }
-                    }
-                    parts.reclaim(solved);
-                } else if let Some(prev) = &self.beta {
-                    // Total failure even with jitter: keep the previous
-                    // coefficients.
-                    for &j in readers.iter() {
-                        beta[j * nc + ci].clone_from(&prev[j * nc + ci]);
-                    }
-                } else {
-                    // And with no fit before it, no fit: the zeros `beta`
-                    // starts at predicted 0.0 as though they had been
-                    // learned (review 2026-10-05, CA5).
-                    for &j in readers.iter() {
-                        beta[j * nc + ci].fill(f64::NAN);
-                    }
-                }
+                let solved = self.solve_standard_combo(
+                    cov,
+                    cross,
+                    readers,
+                    r,
+                    zidx,
+                    ridge,
+                    centred,
+                    over_moments,
+                    &mut failures,
+                    &mut work,
+                    parts,
+                );
+                let at = g * nc + ci;
+                record_solved!(solved, readers, ci, at);
             }
         }
-        // A target with no weight in the accumulators the fit is read from
-        // has no fit to report, and no readiness shares beside it, under a
-        // window -- no row inside it (C2) -- and without one where no solve
-        // has fit it: a target not seen yet, whose solve read cross-moments
-        // of zero as data. Once its rows arrived those zeros were predicted
-        // as exactly 0.0 until the next solve, 56 rows of 80 under
-        // `solve_every = 1000` (review round 4, CC1); it now waits for the
-        // cadence's next solve. Outside a window, a slot a solve has fit
-        // keeps this solve's fit: its mean-form moments hold the history,
-        // which a gap ages and does not move (hard rule 8), and a weight
-        // past the underflow forgets as one just short of it does
-        // (docs/PLAN.md task 115 (c)). So does a prior the caller gave
-        // (`coef_prior`, under a ridge that reads it), a fit before any row,
-        // as a fresh model's first solve reports it.
         let wj = view.as_ref().map_or(&self.acc.wj, |v| &v.acc.wj);
         for (j, &w) in wj.iter().enumerate() {
             if w > 0.0 {
                 continue;
             }
+            let dyn_prior = has_prior_cfg
+                && self.cold_start_identified()
+                && prior::valid_prior_of(
+                    self.dynamic_prior.as_deref().map(Vec::as_slice),
+                    j,
+                    k_total,
+                )
+                .is_some();
             for (ci, &(_, r_idx)) in combos.iter().enumerate() {
                 let slot = j * nc + ci;
                 let prior = self.cfg.coef_prior.is_some() && self.cfg.ridge[r_idx] > 0.0;
@@ -1688,7 +1988,7 @@ impl EwRidge {
                     .beta
                     .as_ref()
                     .is_some_and(|b| !b[slot].iter().any(|v| v.is_nan()));
-                if view.is_none() && (prior || fit_before) {
+                if view.is_none() && (prior || fit_before || dyn_prior) {
                     continue;
                 }
                 beta[slot].fill(f64::NAN);
@@ -1720,6 +2020,119 @@ impl EwRidge {
             work: Some(work),
         };
         self.restart_schedule();
+    }
+
+    /// Standard (no dynamic prior) solve for one `(cov, zidx, ridge)` over
+    /// `readers` (`r` holds uncentred cross-moments when `!centred`).
+    #[allow(clippy::too_many_arguments)]
+    fn solve_standard_combo(
+        &self,
+        cov: &EwCov,
+        cross: &Cross,
+        readers: &[usize],
+        r: &[Vec<f64>],
+        zidx: &[usize],
+        ridge: f64,
+        centred: bool,
+        over_moments: bool,
+        failures: &mut u64,
+        work: &mut FactorWork,
+        parts: &mut Parts,
+    ) -> Option<Solved> {
+        let kc = zidx.len();
+        let mr = readers.len();
+        if centred {
+            return self.solve_centred(
+                cov,
+                cross,
+                readers,
+                failures,
+                work,
+                parts,
+                zidx,
+                ridge,
+                over_moments,
+            );
+        }
+        parts.a.clear();
+        parts.a.resize(kc * kc, 0.0);
+        for (ai, &zi) in zidx.iter().enumerate() {
+            for (aj, &zj) in zidx.iter().enumerate() {
+                parts.a[ai * kc + aj] = cov.raw(zi, zj);
+            }
+        }
+        parts.b.clear();
+        parts.b.resize(kc * mr, 0.0);
+        for (jj, rj) in r.iter().enumerate() {
+            for (ai, &zi) in zidx.iter().enumerate() {
+                parts.b[jj * kc + ai] = rj[zi];
+            }
+        }
+        if self.cfg.ridge_scale {
+            let w = cov.n_eff();
+            let ps = cov.prior_scale();
+            for i in 0..kc {
+                for j in 0..kc {
+                    parts.a[i * kc + j] *= w;
+                }
+                parts.a[i * kc + i] += ps * ridge;
+            }
+            for v in parts.b.iter_mut() {
+                *v *= w;
+            }
+            if let Some(c0) = &self.cfg.coef_prior {
+                for (jj, &j) in readers.iter().enumerate() {
+                    for (ai, &zi) in zidx.iter().enumerate() {
+                        parts.b[jj * kc + ai] += ps * ridge * c0[j][zi];
+                    }
+                }
+            }
+            Self::solve_raw(
+                failures,
+                work,
+                parts,
+                kc,
+                mr,
+                ps * ridge,
+                w,
+                self.cfg.constraints.as_ref(),
+                self.cfg.fit_intercept,
+            )
+        } else if !self.cfg.standardize {
+            for i in 0..kc {
+                parts.a[i * kc + i] += ridge;
+            }
+            if let Some(c0) = &self.cfg.coef_prior {
+                for (jj, &j) in readers.iter().enumerate() {
+                    for (ai, &zi) in zidx.iter().enumerate() {
+                        parts.b[jj * kc + ai] += ridge * c0[j][zi];
+                    }
+                }
+            }
+            Self::solve_raw(
+                failures,
+                work,
+                parts,
+                kc,
+                mr,
+                ridge,
+                1.0,
+                self.cfg.constraints.as_ref(),
+                false,
+            )
+        } else {
+            Self::solve_scaled_through_origin(
+                cov,
+                failures,
+                work,
+                parts,
+                zidx,
+                readers,
+                self.cfg.coef_prior.as_deref(),
+                self.cfg.constraints.as_ref(),
+                ridge,
+            )
+        }
     }
 
     /// Restart the solve schedule as a solve does: its clock, its row count
@@ -1894,6 +2307,9 @@ impl EwRidge {
                 shift: ridge,
                 scale: 1.0,
                 ill,
+                intercept_weight: None,
+                edf0: None,
+                lam_intercept: None,
             });
         }
         // The lower triangle alone, each entry once; the upper stays 0
@@ -1968,6 +2384,9 @@ impl EwRidge {
             shift: ridge,
             scale: 1.0,
             ill,
+            intercept_weight: None,
+            edf0: None,
+            lam_intercept: None,
         })
     }
 
@@ -2203,6 +2622,9 @@ impl EwRidge {
             shift: ridge,
             scale: 1.0,
             ill,
+            intercept_weight: None,
+            edf0: None,
+            lam_intercept: None,
         })
     }
 
@@ -2235,10 +2657,19 @@ impl EwRidge {
     fn fit_has_shape(&self) -> bool {
         let (k, nc) = (self.cfg.k_total(), self.cfg.n_combos());
         let slots = self.cfg.n_targets * nc;
-        let n_systems = self.acc.grams.grams.len() * nc;
+        let max_groups = if self.cfg.prior_weight.is_some() {
+            self.acc.grams.grams.len().max(self.cfg.n_targets)
+        } else {
+            self.acc.grams.grams.len()
+        };
+        let n_systems = max_groups * nc;
         let r = &self.ready;
         let systems = r.systems.iter().flatten().all(|s| {
-            s.z.iter().all(|&zi| zi < k) && s.s.len() == s.z.len() && s.mean.len() == s.z.len()
+            s.z.iter().all(|&zi| zi < k)
+                && s.s.len() == s.z.len()
+                && s.mean.len() == s.z.len()
+                && s.intercept_weight
+                    .is_none_or(|w| w.is_finite() && (0.0..=1.0).contains(&w))
         });
         match &self.beta {
             None => {
@@ -2385,22 +2816,42 @@ impl EwRidge {
     /// each step to it rounds monotonically, so a gate at `limit` decides
     /// the same either way. `f64::NEG_INFINITY` asks for every value exact.
     fn inflation_into(&self, out: &mut Vec<f64>, limit: f64) -> bool {
+        self.inflation_with_prior_into(None, out, limit)
+    }
+
+    /// [`Self::inflation_into`] with an optional explicit cold-start prior
+    /// slice (`n_targets * k_total`, for `&self` scoring with `prior_from`).
+    pub fn inflation_with_prior_into(
+        &self,
+        prior_pre: Option<&[f64]>,
+        out: &mut Vec<f64>,
+        limit: f64,
+    ) -> bool {
         let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
         out.clear();
         out.resize(m * nc, f64::INFINITY);
-        // Below the model's own floor -- fewer effective observations than
-        // its first solve needs -- the estimation variance is unbounded, and
-        // the solves the schedule ran before it read degenerate Grams: the
-        // ratio is infinite there, as `predict` withholds there.
-        if self.beta.is_none()
-            || self.ready.edf.len() != m * nc
-            || self.n_eff() < self.cfg.min_weight
-        {
+        let weights = self.window_weights();
+        let (n_eff, wj) = match weights.as_ref() {
+            Some((w, wj)) => (*w, wj.as_slice()),
+            None => (self.acc.cross.w, self.acc.wj.as_slice()),
+        };
+        if n_eff < self.cfg.min_weight {
             return true;
         }
-        // Under pairwise gaps the sizes are each target's own, a list made
-        // per read; otherwise each is the Gram's, read in place, so a row's
-        // gate allocates nothing.
+        // Cold-start targets (`W_j == 0`) borrowing directly from a valid
+        // causal parent prior incur zero child estimation variance (`1.0`).
+        if self.cfg.prior_weight.is_some() && self.cold_start_identified() {
+            for j in 0..m {
+                if wj[j] <= 0.0 && self.cold_prior_for(prior_pre, j).is_some() {
+                    for c in 0..nc {
+                        out[j * nc + c] = 1.0;
+                    }
+                }
+            }
+        }
+        if self.beta.is_none() || self.ready.edf.len() != m * nc {
+            return true;
+        }
         let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
         let own = if pairwise {
             self.error_sizes().0
@@ -2418,9 +2869,6 @@ impl EwRidge {
             };
             for c in 0..nc {
                 let slot = j * nc + c;
-                // A fit withheld as ill-conditioned has no estimation
-                // variance to read: not a number, which no gate withholds
-                // on, so the row's reason is the condition's.
                 if self.slot_ill(slot) {
                     out[slot] = f64::NAN;
                     continue;
@@ -2554,6 +3002,14 @@ struct Solved {
     /// ([`SpdFactor::carries_no_digit`]): `sol` is NaN and the fit is
     /// withheld (docs/PLAN.md task 278, D4).
     ill: bool,
+    /// When `centred` with a pooled intercept (`prior_weight`), the shrunk
+    /// intercept leverage share `W_j / (W_j + tau)` (absent => `1.0`).
+    intercept_weight: Option<f64>,
+    /// Override for `edf0` when the intercept is partially pooled.
+    edf0: Option<f64>,
+    /// Distinct diagonal penalty for slot 0 when `ridge_scale` is true and
+    /// `prior_include_intercept` is false (before adding jitter).
+    lam_intercept: Option<f64>,
 }
 
 /// The most entries a list of a solve's is kept at between solves: past it
@@ -2635,6 +3091,9 @@ impl Parts {
             shift,
             scale,
             ill,
+            intercept_weight: None,
+            edf0: None,
+            lam_intercept: None,
         }
     }
 
@@ -2740,6 +3199,11 @@ struct System {
     /// field here, written at every solve and read nowhere; it left the
     /// state at schema 38 (review round 4, CA11).
     scale: f64,
+    /// Shrunk intercept leverage share `W_j / (W_j + tau)` when a centred
+    /// solve pools the intercept under `prior_weight`; omitted when `None`
+    /// (`1.0`, preserving pre-existing state bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intercept_weight: Option<f64>,
 }
 
 /// What the last solve left for the readiness statistics
@@ -2811,18 +3275,22 @@ impl Spare {
         &mut self,
         factor: SpdFactor,
         lam: f64,
+        lam_intercept: Option<f64>,
         to: impl Iterator<Item = Option<usize>>,
         edf0: f64,
         sup0: &[f64],
         proj: Option<Arc<ConstraintProj>>,
         cert: &mut Vec<f64>,
     ) -> Arc<Pending> {
-        let numbers = lam.is_finite() && factor.inverse_is_finite_in(cert);
+        let numbers = lam.is_finite()
+            && lam_intercept.is_none_or(f64::is_finite)
+            && factor.inverse_is_finite_in(cert);
         let mut arc = self.0.pop().unwrap_or_else(|| Arc::new(Pending::hollow()));
         match Arc::get_mut(&mut arc) {
             Some(p) => {
                 p.factor = factor;
                 p.lam = lam;
+                p.lam_intercept = lam_intercept;
                 p.to.clear();
                 p.to.extend(to);
                 p.edf0 = edf0;
@@ -2837,6 +3305,7 @@ impl Spare {
             None => Arc::new(Pending {
                 factor,
                 lam,
+                lam_intercept,
                 to: to.collect(),
                 edf0,
                 sup0: sup0.to_vec(),
@@ -2861,6 +3330,9 @@ struct Pending {
     factor: SpdFactor,
     /// The penalty on the diagonal plus the jitter the factor needed.
     lam: f64,
+    /// Distinct diagonal penalty for slot 0 when `ridge_scale` is true and
+    /// `prior_include_intercept` is false.
+    lam_intercept: Option<f64>,
     /// Per kept column, in the factor's order: the accumulator slot its
     /// share goes to, or `None` for an intercept, which is not a share.
     to: Vec<Option<usize>>,
@@ -2887,6 +3359,7 @@ impl Pending {
         Self {
             factor: SpdFactor::hollow(),
             lam: 0.0,
+            lam_intercept: None,
             to: Vec::new(),
             edf0: 0.0,
             sup0: Vec::new(),
@@ -2907,21 +3380,36 @@ impl Pending {
                 let p_diag = proj.oblique_proj_diag();
                 let mut sup = self.sup0.clone();
                 for (i2, to) in self.to.iter().enumerate() {
-                    let share = (1.0 - p_diag[i2] - self.lam * inv_c[i2]).clamp(0.0, 1.0);
+                    let lam_i = if i2 == 0 {
+                        self.lam_intercept.unwrap_or(self.lam)
+                    } else {
+                        self.lam
+                    };
+                    let share = (1.0 - p_diag[i2] - lam_i * inv_c[i2]).clamp(0.0, 1.0);
                     if let Some(zi) = *to {
                         sup[zi] = share;
                     }
                 }
                 let free = d.saturating_sub(q) as f64;
-                let trace_inv_c: f64 = inv_c.iter().sum();
-                let edf = self.edf0 + (free - self.lam * trace_inv_c).clamp(0.0, free);
+                let pen_trace = match self.lam_intercept {
+                    Some(l0) if !inv_c.is_empty() => {
+                        l0 * inv_c[0] + self.lam * inv_c[1..].iter().sum::<f64>()
+                    }
+                    _ => self.lam * inv_c.iter().sum::<f64>(),
+                };
+                let edf = self.edf0 + (free - pen_trace).clamp(0.0, free);
                 return (edf, sup);
             }
             let inv = self.factor.inverse_diagonal(self.to.len());
             let mut edf = self.edf0;
             let mut sup = self.sup0.clone();
             for (i2, to) in self.to.iter().enumerate() {
-                let share = (1.0 - self.lam * inv[i2]).clamp(0.0, 1.0);
+                let lam_i = if i2 == 0 {
+                    self.lam_intercept.unwrap_or(self.lam)
+                } else {
+                    self.lam
+                };
+                let share = (1.0 - lam_i * inv[i2]).clamp(0.0, 1.0);
                 edf += share;
                 if let Some(zi) = *to {
                     sup[zi] = share;
@@ -3130,16 +3618,24 @@ impl EwRidge {
     /// [`OnlineModel::predict`], into the caller's buffer: what `step`
     /// reports, read before the row (task 270, M-4).
     fn predict_into(&self, x: &[f64], d_clock: f64, out: &mut Step) {
+        self.predict_with_prior_into(x, d_clock, None, out);
+    }
+
+    /// [`Self::predict_into`] with an optional explicit cold-start prior
+    /// slice (`n_targets * k_total`, for `&self` scoring with `prior_from`).
+    pub fn predict_with_prior_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        prior_pre: Option<&[f64]>,
+        out: &mut Step,
+    ) {
         debug_assert_eq!(x.len(), self.cfg.n_features);
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             *out = refused;
             return;
         }
-        let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
-        // The gate and the per-target test read the window's weights, so a
-        // target with nothing in the window reports nothing (C2) -- the
-        // weights alone, not the O(k²) view, which is the solve's and was
-        // built here every row for these two numbers (review 2026-09-12, P1).
+        let (m, nc, k_total) = (self.cfg.n_targets, self.cfg.n_combos(), self.cfg.k_total());
         let weights = self.window_weights();
         let (n_eff, wj) = match weights.as_ref() {
             Some((w, wj)) => (*w, wj.as_slice()),
@@ -3148,17 +3644,121 @@ impl EwRidge {
         out.pred.clear();
         out.pred.resize(m * nc, f64::NAN);
         let pred = &mut out.pred;
-        if let (true, Some(beta)) = (n_eff >= self.cfg.min_weight, &self.beta) {
+        if n_eff >= self.cfg.min_weight {
+            let mut cold_buf = Vec::new();
             for j in 0..m {
                 if wj[j] > 0.0 {
-                    for c in 0..nc {
-                        pred[j * nc + c] = dot_aug(&beta[j * nc + c], x, self.cfg.fit_intercept);
+                    if let Some(beta) = &self.beta {
+                        for c in 0..nc {
+                            pred[j * nc + c] =
+                                dot_aug(&beta[j * nc + c], x, self.cfg.fit_intercept);
+                        }
+                    }
+                } else if let Some(bp) = self.cold_prior_for(prior_pre, j) {
+                    cold_buf.resize(k_total, 0.0);
+                    if self.cold_start_beta(bp, &mut cold_buf) {
+                        let p = dot_aug(&cold_buf, x, self.cfg.fit_intercept);
+                        for c in 0..nc {
+                            pred[j * nc + c] = p;
+                        }
                     }
                 }
             }
         }
         out.n_eff = n_eff;
         out.extra = None;
+    }
+
+    /// [`OnlineModel::row_error_inflation_into`] with an optional explicit
+    /// cold-start prior slice (`n_targets * k_total`).
+    pub fn row_error_inflation_with_prior_into(
+        &self,
+        x: &[f64],
+        _d_clock: f64,
+        prior_pre: Option<&[f64]>,
+        out: &mut Vec<f64>,
+    ) -> bool {
+        if self.cfg.constraint.is_some() {
+            out.clear();
+            return false;
+        }
+        let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
+        out.clear();
+        out.resize(m * nc, f64::INFINITY);
+        let weights = self.window_weights();
+        let (n_eff, wj) = match weights.as_ref() {
+            Some((w, wj)) => (*w, wj.as_slice()),
+            None => (self.acc.cross.w, self.acc.wj.as_slice()),
+        };
+        if n_eff < self.cfg.min_weight {
+            return true;
+        }
+        if self.cfg.prior_weight.is_some() && self.cold_start_identified() {
+            for j in 0..m {
+                if wj[j] <= 0.0 && self.cold_prior_for(prior_pre, j).is_some() {
+                    let p = if x.iter().all(|v| v.is_finite()) {
+                        1.0
+                    } else {
+                        f64::NAN
+                    };
+                    for c in 0..nc {
+                        out[j * nc + c] = p;
+                    }
+                }
+            }
+        }
+        if self.beta.is_none() || self.ready.system_of.len() != m * nc {
+            return true;
+        }
+        let (sizes, means) = self.error_sizes();
+        let mut v = Vec::new();
+        for j in 0..m {
+            let Some(n) = sizes[j] else {
+                continue;
+            };
+            let own = means.as_ref().map(|mj| &mj[j]);
+            if n <= 0.0 {
+                continue;
+            }
+            for c in 0..nc {
+                let slot = j * nc + c;
+                if self.slot_ill(slot) {
+                    out[slot] = f64::NAN;
+                    continue;
+                }
+                let Some((sys, factor, proj)) = self.kept_system(slot) else {
+                    continue;
+                };
+                let use_own = !(sys.intercept_weight.is_some() && !self.cfg.standardize);
+                let q =
+                    factor.map_or(0.0, |factor| {
+                        v.clear();
+                        v.extend(sys.z.iter().zip(&sys.s).zip(&sys.mean).map(
+                            |((&zi, &s), &mu)| {
+                                let mu = if use_own {
+                                    own.map_or(mu, |mj| mj[zi])
+                                } else {
+                                    mu
+                                };
+                                (self.z_at(x, zi) - mu) / s
+                            },
+                        ));
+                        let form = match proj {
+                            Some(p) => p.projected_quad_spd(factor, &v),
+                            None => factor.quad_forms(&v, sys.z.len(), 1)[0],
+                        };
+                        form * sys.scale
+                    });
+                let int_term = if sys.centred {
+                    sys.intercept_weight.unwrap_or(1.0)
+                } else {
+                    0.0
+                };
+                let h = (q + int_term) / n;
+                out[slot] = (1.0 + h).sqrt();
+            }
+        }
+        true
     }
 }
 
@@ -3287,59 +3887,8 @@ impl OnlineModel for EwRidge {
     /// feature the system kept is not a number, whose form is NaN, not the
     /// 0 the form's clamp once made of it (task 181). Read for output only:
     /// nothing here reaches the state.
-    fn row_error_inflation_into(&self, x: &[f64], _d_clock: f64, out: &mut Vec<f64>) -> bool {
-        if self.cfg.constraint.is_some() {
-            out.clear();
-            return false;
-        }
-        let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
-        out.clear();
-        out.resize(m * nc, f64::INFINITY);
-        if self.beta.is_none()
-            || self.ready.system_of.len() != m * nc
-            || self.n_eff() < self.cfg.min_weight
-        {
-            return true;
-        }
-        let (sizes, means) = self.error_sizes();
-        let mut v = Vec::new();
-        for j in 0..m {
-            let Some(n) = sizes[j] else {
-                continue;
-            };
-            let own = means.as_ref().map(|mj| &mj[j]);
-            if n <= 0.0 {
-                continue;
-            }
-            for c in 0..nc {
-                let slot = j * nc + c;
-                if self.slot_ill(slot) {
-                    out[slot] = f64::NAN;
-                    continue;
-                }
-                let Some((sys, factor, proj)) = self.kept_system(slot) else {
-                    continue;
-                };
-                let q =
-                    factor.map_or(0.0, |factor| {
-                        v.clear();
-                        v.extend(sys.z.iter().zip(&sys.s).zip(&sys.mean).map(
-                            |((&zi, &s), &mu)| {
-                                let mu = own.map_or(mu, |mj| mj[zi]);
-                                (self.z_at(x, zi) - mu) / s
-                            },
-                        ));
-                        let form = match proj {
-                            Some(p) => p.projected_quad_spd(factor, &v),
-                            None => factor.quad_forms(&v, sys.z.len(), 1)[0],
-                        };
-                        form * sys.scale
-                    });
-                let h = (q + if sys.centred { 1.0 } else { 0.0 }) / n;
-                out[slot] = (1.0 + h).sqrt();
-            }
-        }
-        true
+    fn row_error_inflation_into(&self, x: &[f64], d_clock: f64, out: &mut Vec<f64>) -> bool {
+        self.row_error_inflation_with_prior_into(x, d_clock, None, out)
     }
 
     /// Per slot, each coefficient's variance over the noise in `coef`'s
@@ -3393,12 +3942,20 @@ impl OnlineModel for EwRidge {
                     }
                 }
                 if sys.centred {
+                    let use_own = !(sys.intercept_weight.is_some() && !self.cfg.standardize);
                     let u: Vec<f64> = sys
                         .mean
                         .iter()
                         .zip(&sys.s)
                         .zip(&sys.z)
-                        .map(|((&mu, s), &zi)| own.map_or(mu, |mj| mj[zi]) / s)
+                        .map(|((&mu, s), &zi)| {
+                            let mu = if use_own {
+                                own.map_or(mu, |mj| mj[zi])
+                            } else {
+                                mu
+                            };
+                            mu / s
+                        })
                         .collect();
                     let q = factor.map_or(0.0, |factor| {
                         let form = match proj {
@@ -3407,7 +3964,8 @@ impl OnlineModel for EwRidge {
                         };
                         form * sys.scale
                     });
-                    v[0] = (1.0 + q) / n;
+                    let int_term = sys.intercept_weight.unwrap_or(1.0);
+                    v[0] = (int_term + q) / n;
                 }
             }
         }
@@ -3462,6 +4020,7 @@ impl OnlineModel for EwRidge {
         // weight 0, where the row itself at weight 0 would be held as it is:
         // the block closes on the same row, and merges to the same moments.
         if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
+            self.clear_step_priors();
             *out = refused;
             return;
         }
@@ -3577,8 +4136,20 @@ impl OnlineModel for EwRidge {
         // them, and the fit read until the next solve moved (docs/PLAN.md
         // task 214).
         if weight <= 0.0 {
+            self.clear_step_priors();
             return;
         }
+        // Commit the causal post-row dynamic prior only on positive-weight
+        // rows (preserving zero-weight immutability) before checking solves.
+        if self.step_prior.has_post {
+            let post = std::mem::take(&mut self.step_prior.post);
+            self.set_dynamic_prior_flat(Some(&post));
+            self.step_prior.post = post;
+            self.step_prior.post.clear();
+            self.step_prior.has_post = false;
+        }
+        self.step_prior.has_pre = false;
+        self.step_prior.pre.clear();
         // A weight here is usable, finite and `>= 0` (`OnlineModel::step`;
         // `refused_step` steps a row whose weight is not as a row of 0).
         self.rows_since_solve += 1;
@@ -3684,9 +4255,15 @@ impl OnlineModel for EwRidge {
                 // A ring exactly when the cfg has a window (review 2026-09-26,
                 // C5: `ew_cov`, `lasso` and `ew_class` checked this, this one
                 // did not, and ran unwindowed without a word).
+                let dyn_prior_ok = match &m.dynamic_prior {
+                    None => true,
+                    Some(_) if m.cfg.prior_weight.is_none() => false,
+                    Some(dp) => dp.len() == n && dp.iter().all(|v| v.len() == k),
+                };
                 if !m.acc.has_shape(n, k)
                     || !twin
                     || !fit
+                    || !dyn_prior_ok
                     || m.wsig.len() != n
                     || m.sig2.len() != n
                     || m.win.is_some() != m.cfg.window.is_some()
@@ -3757,10 +4334,14 @@ impl OnlineModel for EwRidge {
 }
 
 mod bounded;
+mod prior;
 mod unread;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod prior_tests;
 
 #[cfg(test)]
 mod condition_tests;

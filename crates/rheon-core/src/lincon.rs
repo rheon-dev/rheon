@@ -649,6 +649,8 @@ mod tests {
                 max_rows_between_snapshots: None,
                 constraints: Some(lc.clone()),
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -752,6 +754,8 @@ mod tests {
                 max_rows_between_snapshots: None,
                 constraints: Some(lc.clone()),
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -803,6 +807,8 @@ mod tests {
                 rhs: vec![1.0],
             }),
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
         let mut s = 99u64;

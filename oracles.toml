@@ -7754,6 +7754,28 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."parent_prior.parent_prior_oracle"]
+tests = [
+    "tests/test_parent_prior.py::test_parent_prior_50_seed_scipy_oracle",
+]
+oracles = { "scipy" = "1.18.1" }
+dataset = ""
+
+[case."parent_prior.parent_prior_oracle.coef_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."parent_prior.parent_prior_oracle.diag_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."parent_prior.parent_prior_oracle.se_coef_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
 # --- raises
 
 [[raised]]
