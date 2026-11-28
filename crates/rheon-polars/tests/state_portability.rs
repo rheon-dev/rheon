@@ -327,7 +327,7 @@ const SPECS: &[(&str, &str, &str)] = &[
 const CLOSING: [&str; 3] = ["rcov", "closing", "sessioned"];
 
 /// The rows of the stream, and the row it is saved at.
-const N: usize = 400;
+const N: usize = 500;
 const SPLIT: usize = 200;
 
 /// How far two platforms' numbers may part, relative: the golden pipeline's.
@@ -425,20 +425,18 @@ fn frame() -> DataFrame {
 /// until a likelihood-ratio test tells the process from a constant variance,
 /// never comes and its state holds no fit to carry across the save.
 fn gjr_returns(n: usize) -> Vec<f64> {
-    let mut r = lcg(31);
+    let mut r = lcg(4);
     let mut normal = move || {
         // Box-Muller from two uniforms in (0, 1].
         let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
         (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
     };
-    let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);
+    let (omega, alpha, gamma, beta) = (0.05, 0.35, 0.25, 0.30);
     let (mut var, mut prev) = (omega / (1.0 - alpha - gamma / 2.0 - beta), 0.0f64);
     (0..n)
         .map(|_| {
             var = omega + (alpha + if prev < 0.0 { gamma } else { 0.0 }) * prev * prev + beta * var;
-            let chi2: f64 = (0..nu as usize).map(|_| normal().powi(2)).sum();
-            let z = normal() / (chi2 / nu).sqrt() * ((nu - 2.0) / nu).sqrt();
-            prev = var.sqrt() * z;
+            prev = var.sqrt() * normal();
             prev
         })
         .collect()

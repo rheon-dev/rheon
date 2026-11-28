@@ -647,7 +647,7 @@ def clock_specs(draw, model: str, step: int, cap: int):
                 "xc": {"x1": 1, f"x0@{steps(1, 6)}": 1},
             },
             kind={"skew": "standardized", "ac": "standardized"},
-            se=draw(st.booleans()),
+            emit_se=draw(st.booleans()),
         )
         kw |= maybe("lag_tolerance", 0, 6)
         window = draw(st.sampled_from(["none", "rows", "clock"]))
@@ -1088,13 +1088,14 @@ class TestGarchOnATemporalClock:
     @STREAMS
     @given(data=st.data())
     def test_chunking_and_a_save_change_nothing_once_started(self, data):
-        from test_properties import GARCH_START, _gjr_returns
+        from test_properties import _gjr_returns
 
         dtype = data.draw(clock_dtypes(), label="dtype")
         step = _step(dtype)
-        # Skew-t, variance targeting, GJR-t and EGARCH pass the LR gate by row
-        # 100 on `_gjr_returns`, so draw at least 115 rows.
-        n = data.draw(st.integers(115, 160), label="rows")
+        # All six forms (normal, t, skew-t, targeted, GJR-t, EGARCH) clear the
+        # LR + Fisher SE identification gates by row 400 on `_gjr_returns`, so
+        # draw at least 415 rows.
+        n = data.draw(st.integers(415, 460), label="rows")
         gaps = data.draw(st.lists(st.sampled_from([0, 1, 1, 1, 2, 5]), min_size=n, max_size=n))
         start = data.draw(_instants(step), label="start")
         instants = np.cumsum([start + gaps[0] * step, *[g * step for g in gaps[1:]]])
@@ -1114,8 +1115,9 @@ class TestGarchOnATemporalClock:
             ),
             label="form",
         )
-        if data.draw(st.booleans(), label="a span"):
-            kw = {**form, "start_span": format_duration(GARCH_START * step)}
+        elapsed_400 = int(instants[399] - instants[0])
+        if data.draw(st.booleans(), label="a span") and elapsed_400 > 0:
+            kw = {**form, "start_span": format_duration(elapsed_400)}
         else:
             kw = {**form, "start_rows": 50}
         spec = rp.spec.garch("m", targets=["y"], clock="t", gap_cap=format_duration(8 * step), **kw)

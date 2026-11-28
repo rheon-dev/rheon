@@ -598,6 +598,17 @@ def kind_frame(case: str) -> pl.DataFrame:
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     if builder == "bandit":
         df = df.with_columns(arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if builder == "garch":
+        grng = np.random.default_rng([31, 587])
+        cols = {}
+        for col in ("y", "z"):
+            s, e, ret = 0.25, 0.0, np.empty(N_KINDS)
+            for idx, draw in enumerate(grng.standard_normal(N_KINDS)):
+                s = 0.05 + 0.35 * e * e + 0.45 * s
+                e = float(np.sqrt(s)) * draw
+                ret[idx] = e
+            cols[col] = ret
+        df = df.with_columns(**cols)
     return df
 
 

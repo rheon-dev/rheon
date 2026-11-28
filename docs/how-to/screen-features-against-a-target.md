@@ -167,9 +167,10 @@ a saturation, with `corr` at zero.
 1. **Give `bins`, such as `bins=8`.** Each pair gains the target's weight,
    mean and variance inside each of the feature's bins, its response
    curve, in `bin_edges`, `bin_n`, `bin_mean_y` and `bin_var_y`. The edges
-   are learned from the first `bin_warm_rows` learned rows (1,000 by
-   default) and never move. Or give `bin_edges` in place of `bins` to
-   set the edges yourself.
+   are learned from the first `bin_warm_rows` learned rows
+   (`ceil(62.5 × bins)` by default — 500 at `bins=8`, 1,000 at `bins=16`)
+   and never move. Or give `bin_edges` in place of `bins` to set the edges
+   yourself.
 2. **Read `split_gain` against `corr²`.** `split_gain` is a regression
    stump's R²: the share of the target's variance the best single cut of
    the curve removes. Its excess over `corr²` is the nonlinear surplus.
@@ -196,8 +197,8 @@ for r in table.sort("surplus", descending=True).head(3).iter_rows(named=True):  
 
 ```text
 f150: corr +0.02, corr² 0.000, split_gain 0.021
-f181: corr +0.00, corr² 0.000, split_gain 0.002
-f115: corr +0.01, corr² 0.000, split_gain 0.002
+f113: corr -0.04, corr² 0.001, split_gain 0.003
+f125: corr +0.03, corr² 0.001, split_gain 0.002
 ```
 
 The V-shaped `f150` stands out by ten times the next, with a correlation

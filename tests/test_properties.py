@@ -1661,22 +1661,17 @@ def test_a_weight_past_the_bound_is_missing(kind, value):
 
 
 def _gjr_returns(n: int) -> np.ndarray:
-    """``n`` GJR-GARCH(1,1) returns, ``σ² = 0.01 + (0.10 + 0.15·1[r < 0])
-    r² + 0.82 σ²`` on the row before, innovations a correlated normal's
-    first margin, as ``scripts/release_probe.py``'s ``ra``: a series whose
-    ``garch`` start comes at its 51st row, where its likelihood-ratio test
-    against a constant variance first passes."""
-    rng = np.random.default_rng([9, 578])
-    qbar = np.full((3, 3), 0.3) + 0.7 * np.eye(3)
-    q, e = qbar.copy(), np.zeros(3)
-    var, prev = 0.01 / (1 - 0.10 - 0.075 - 0.82), 0.0
+    """``n`` stationary GJR-GARCH(1,1) returns,
+    ``σ² = 0.05 + (0.35 + 0.25·1[r < 0]) r² + 0.30 σ²``, persistence 0.775:
+    all six forms tested in ``TestGarchOnReturns`` and
+    ``TestGarchOnATemporalClock`` clear the likelihood-ratio and finite-sample
+    Fisher SE identification gates by row 400."""
+    rng = np.random.default_rng([1, 5871])
+    var, prev = 0.05 / (1.0 - 0.35 - 0.125 - 0.30), 0.0
     out = np.empty(n)
     for i in range(n):
-        q = 0.03 * qbar + 0.12 * np.outer(e, e) + 0.85 * q
-        d = np.sqrt(np.diag(q))
-        e = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(3)
-        var = 0.01 + (0.10 + 0.15 * (prev < 0)) * prev**2 + 0.82 * var
-        prev = float(np.sqrt(var) * e[0])
+        var = 0.05 + (0.35 + 0.25 * (prev < 0)) * prev * prev + 0.30 * var
+        prev = float(np.sqrt(var) * rng.standard_normal())
         out[i] = prev
     return out
 
@@ -1718,10 +1713,11 @@ class TestGarchOnReturns:
 
     def test_the_properties_hold_once_started(self):
         def prop(data, chunk):
-            # Skew-t, variance targeting, GJR-t and EGARCH pass the LR gate by
-            # row 100 on `_gjr_returns`, so keep the first 105 rows clean.
-            clean_end = 105
-            n = data.draw(st.integers(clean_end + 10, 160), label="rows")
+            # All six forms (normal, t, skew-t, targeted, GJR-t, EGARCH) clear
+            # the LR + Fisher SE identification gates by row 400 on
+            # `_gjr_returns`, so keep the first 405 rows clean.
+            clean_end = 405
+            n = data.draw(st.integers(clean_end + 10, 460), label="rows")
             y = _gjr_returns(n).tolist()
             w = [1.0] * n
             for i in range(clean_end, n):

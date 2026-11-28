@@ -22,7 +22,7 @@ use rheon_polars::{Bank, Spec};
 use rmpv::Value;
 
 /// Rows of the stream.
-const N: usize = 420;
+const N: usize = 450;
 /// Rows per chunk.
 const CHUNK: usize = 37;
 /// Nanoseconds since the Unix epoch of 2024-01-01T00:00:00.
@@ -138,21 +138,22 @@ fn frame() -> DataFrame {
     .unwrap()
 }
 
-/// `n` returns of a GJR-GARCH(1,1) with Student-t(8) innovations scaled to
-/// unit variance, from a generator of their own (the other columns keep
-/// their draws): `σ²ₜ = ω + (α + γ·1[rₜ₋₁ < 0]) r²ₜ₋₁ + β σ²ₜ₋₁`,
-/// persistence `α + γ/2 + β = 0.995`. `garch`'s start waits until a
-/// likelihood-ratio test tells the process from a constant variance, which
-/// on a linear target such as `y` it never does: there every output was
-/// null, on the stream with zero-weight rows and without.
+/// `n` returns of a stationary GJR-GARCH(1,1) with Student-t(8) innovations
+/// scaled to unit variance, from a generator of their own (the other columns
+/// keep their draws): `σ²ₜ = ω + (α + γ·1[rₜ₋₁ < 0]) r²ₜ₋₁ + β σ²ₜ₋₁`,
+/// persistence `α + γ/2 + β = 0.75`. `garch`'s start waits until its
+/// likelihood-ratio and finite-sample SE identification tests separate the
+/// process from a constant variance, which on a linear target such as `y` it
+/// never does: there every output was null, on the stream with zero-weight
+/// rows and without.
 fn gjr_returns(n: usize) -> Vec<f64> {
-    let mut r = lcg(31);
+    let mut r = lcg(2);
     let mut normal = move || {
         // Box-Muller from two uniforms in (0, 1].
         let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
         (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
     };
-    let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);
+    let (omega, alpha, gamma, beta, nu) = (0.05, 0.25, 0.20, 0.40, 8.0);
     let (mut var, mut prev) = (omega / (1.0 - alpha - gamma / 2.0 - beta), 0.0f64);
     (0..n)
         .map(|_| {

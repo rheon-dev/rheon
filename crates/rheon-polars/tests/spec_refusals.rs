@@ -1403,11 +1403,18 @@ fn a_dcc_past_its_state_cap_or_its_forms_is_refused() {
     };
     accepted(&spec(r#"{"type": "dcc"}"#, 2));
     accepted(&spec(r#"{"type": "dcc"}"#, 8));
+    // Under adaptive starts (PLAN 587), default margin_start_rows is 64, so
+    // 9 targets fit easily inside the default 256 KiB cap; an explicit
+    // 2,000-row margin start still exceeds it unless max_state_bytes is raised.
+    accepted(&spec(r#"{"type": "dcc"}"#, 9));
     refused(
-        &spec(r#"{"type": "dcc"}"#, 9),
+        &spec(r#"{"type": "dcc", "margin_start_rows": 2000}"#, 9),
         &["past max_state_bytes of 262144", "margins' start_rows"],
     );
-    accepted(&spec(r#"{"type": "dcc", "max_state_bytes": 400000}"#, 9));
+    accepted(&spec(
+        r#"{"type": "dcc", "margin_start_rows": 2000, "max_state_bytes": 400000}"#,
+        9,
+    ));
     accepted(&spec(r#"{"type": "dcc", "a": 0.05, "b": 0.9}"#, 3));
     accepted(&spec(
         r#"{"type": "dcc", "asymmetric": true, "a": 0.03, "b": 0.9, "g": 0.04}"#,

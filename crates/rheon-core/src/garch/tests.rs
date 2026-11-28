@@ -1593,7 +1593,7 @@ fn adaptive_start_and_fisher_se_gate_hold_across_forms() {
     // Adaptive RPEM handoff (`adaptive_start = true`) holds stricter Fisher-SE
     // cuts than an explicit start, round-trips through msgpack preserving
     // `adaptive_start`, and stays power-of-two weight invariant.
-    let ys_long = gjr_series([0.05, 0.08, 0.0, 0.90], 2600, 43, 1.0);
+    let ys_long = gjr_series([0.05, 0.08, 0.0, 0.90], 4200, 43, 1.0);
     let mut c_adapt = cfg(GarchVol::Garch, GarchDist::Normal);
     c_adapt.start_rows = default_garch_start_rows(GarchVol::Garch, GarchDist::Normal, false, 0);
     c_adapt.adaptive_start = true;
@@ -1612,9 +1612,9 @@ fn adaptive_start_and_fisher_se_gate_hold_across_forms() {
             started_adapt = Some(t);
         }
     }
-    let sa = started_adapt.expect("adaptive_start should start within 2600 rows");
+    let sa = started_adapt.expect("adaptive_start should start within 4200 rows");
     assert!(
-        (1024..=2048).contains(&sa) && sa % 64 == 0 && (sa / 64).is_power_of_two(),
+        (1024..=4096).contains(&sa) && sa % 64 == 0 && (sa / 64).is_power_of_two(),
         "adaptive_start started at {sa}"
     );
 }
