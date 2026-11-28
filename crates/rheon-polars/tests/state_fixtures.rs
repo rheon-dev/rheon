@@ -2310,6 +2310,7 @@ fn merge_cfg(by: bool) -> MergeConfig {
         by: by.then(|| "sym".into()),
         restart: by.then_some(rheon_polars::Restart::Int(600_000_000_000)),
         restart_text: by.then(|| "10m".into()),
+        skip_step_back: false,
         carry: Vec::new(),
     }
 }
@@ -2691,6 +2692,7 @@ fn bars_cfg(name: &str) -> BarsConfig {
         gap_cap: None,
         max_span: None,
         restart_after_step_back: None,
+        on_step_back: None,
         keep_partial: true,
         monotone: false,
         max_state_bytes: 256 * 1024,
@@ -3160,6 +3162,31 @@ fn kinds() -> Vec<Kind> {
             name: "bank_conformal_scores",
             first: conformal_scores_first,
             run: conformal_scores_run,
+        },
+        Kind {
+            name: "bank_step_back_skip",
+            first: step_back_fixtures::bank_step_back_skip_first,
+            run: step_back_fixtures::bank_step_back_skip_run,
+        },
+        Kind {
+            name: "with_windows_step_back_skip",
+            first: step_back_fixtures::windows_step_back_skip_first,
+            run: step_back_fixtures::windows_step_back_skip_run,
+        },
+        Kind {
+            name: "merge_step_back_skip",
+            first: step_back_fixtures::merge_step_back_skip_first,
+            run: step_back_fixtures::merge_step_back_skip_run,
+        },
+        Kind {
+            name: "refresh_time_step_back_skip",
+            first: step_back_fixtures::refresh_time_step_back_skip_first,
+            run: step_back_fixtures::refresh_time_step_back_skip_run,
+        },
+        Kind {
+            name: "bars_step_back_skip",
+            first: step_back_fixtures::bars_step_back_skip_first,
+            run: step_back_fixtures::bars_step_back_skip_run,
         },
     ]
 }
@@ -4026,12 +4053,12 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 29),
-            ("bars", 3),
+            ("bank", 30),
+            ("bars", 4),
             ("checkpoint", 1),
-            ("merge", 3),
-            ("refresh_time", 5),
-            ("windows", 12)
+            ("merge", 4),
+            ("refresh_time", 6),
+            ("windows", 13)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -4846,4 +4873,6 @@ fn leaves(v: &rmpv::Value, path: &str, out: &mut Vec<(String, rmpv::Value)>) {
 
 #[path = "state_fixtures_extra/mod.rs"]
 mod extra;
+#[path = "state_fixtures_extra/step_back.rs"]
+mod step_back_fixtures;
 use extra::dir;

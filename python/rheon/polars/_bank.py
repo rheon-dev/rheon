@@ -2006,7 +2006,9 @@ class ModelBank:
             The rows whose session differed from the row before.
         ``clock_backwards``
             The rows whose clock fell below the row before within a session,
-            which ``restart_after_step_back`` decided about.
+            which ``on_step_back`` and ``restart_after_step_back`` decided
+            about (both resets and stale rows skipped under
+            ``on_step_back="skip"``).
         ``resets``
             The rows at which ``session_gap = "reset"`` or
             ``restart_after_step_back`` reset the model.
@@ -3622,8 +3624,9 @@ class ModelBank:
                alone)
            * - ``step_back``
              - warning
-             - the clock stepped back, a reset or a late row under
-               ``restart_after_step_back``
+             - the clock stepped back, a reset under
+               ``restart_after_step_back`` or a stale row skipped under
+               ``on_step_back="skip"``
            * - ``resets``
              - info
              - a model reset at a ``session_gap = "reset"`` or a step back

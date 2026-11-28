@@ -50,6 +50,7 @@ class CommonKwargs(TypedDict, total=False):
     lam: float | None
     gap_cap: float | Duration | None
     restart_after_step_back: float | Duration | None
+    on_step_back: Literal["error", "skip"]
     session: str | None
     session_gap: float | Duration | None
     weight: str | None

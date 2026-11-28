@@ -250,7 +250,7 @@ fn the_clock_policy_resolves_as_task_120_decided() {
     let r = resolved_with("", "type = \"ewridge\"");
     assert_eq!(
         r["clock"],
-        json!({"gap_cap": "inf", "restart_after_step_back": null, "session_gap": null})
+        json!({"gap_cap": "inf", "on_step_back": "error", "restart_after_step_back": null, "session_gap": null})
     );
     let clocked = "clock = \"t\"\ngap_cap = 5.0\nrestart_after_step_back = 2.0\nsession = \"s\"";
     let r = resolved_with(
@@ -259,7 +259,23 @@ fn the_clock_policy_resolves_as_task_120_decided() {
     );
     assert_eq!(
         r["clock"],
-        json!({"gap_cap": 5.0, "restart_after_step_back": 2.0, "session_gap": 3.0})
+        json!({"gap_cap": 5.0, "on_step_back": "error", "restart_after_step_back": 2.0, "session_gap": 3.0})
+    );
+    let r = resolved_with(
+        "clock = \"t\"\ngap_cap = 5.0\non_step_back = \"skip\"",
+        "type = \"ewridge\"",
+    );
+    assert_eq!(
+        r["clock"],
+        json!({"gap_cap": 5.0, "on_step_back": "skip", "restart_after_step_back": null, "session_gap": null})
+    );
+    let r = resolved_with(
+        "clock = \"t\"\ngap_cap = 5.0\non_step_back = \"skip\"\nrestart_after_step_back = 2.0",
+        "type = \"ewridge\"",
+    );
+    assert_eq!(
+        r["clock"],
+        json!({"gap_cap": 5.0, "on_step_back": "skip", "restart_after_step_back": 2.0, "session_gap": null})
     );
     let r = resolved_with(
         &format!("{clocked}\nsession_gap = \"reset\""),

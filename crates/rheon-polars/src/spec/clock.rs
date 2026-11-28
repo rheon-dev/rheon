@@ -140,6 +140,34 @@ pub enum ClockScale {
     Durations(&'static str),
 }
 
+/// Whether an `on_step_back` field holds its default (`None` or `Some("error")`),
+/// so default configs serialize zero extra bytes.
+pub(crate) fn is_default_step_back(v: &Option<String>) -> bool {
+    matches!(v.as_deref(), None | Some("error"))
+}
+
+/// Validate an `on_step_back` string value (`"error"` or `"skip"`), returning
+/// `true` when it is `"skip"`. Refuses unknown values and `"skip"` without a
+/// clock when `needs_clock` is true.
+pub(crate) fn parse_step_back(
+    who: &str,
+    value: Option<&str>,
+    has_clock: bool,
+) -> Result<bool, String> {
+    match value {
+        None | Some("error") => Ok(false),
+        Some("skip") if has_clock => Ok(true),
+        Some("skip") => Err(format!(
+            "{who}: on_step_back=\"skip\" applies only with a clock, but clock is not set. \
+             Set clock, or leave out on_step_back."
+        )),
+        Some(other) => Err(format!(
+            "{who}: on_step_back must be \"error\" or \"skip\", but it is {other:?}. \
+             Use one of those words."
+        )),
+    }
+}
+
 /// A clock policy in a caller's own words: a spec's, or `rp.stream.with_windows`'
 /// (docs/PLAN.md task 78: one set of clock rules, stated once).
 pub(crate) struct ClockPolicy<'a> {
@@ -148,6 +176,7 @@ pub(crate) struct ClockPolicy<'a> {
     pub clock: Option<&'a str>,
     pub gap_cap: Option<&'a Span>,
     pub restart_after_step_back: Option<&'a Span>,
+    pub on_step_back: Option<&'a str>,
     pub session: Option<&'a str>,
     pub session_gap: Option<&'a SessionGapSpec>,
     /// For a spec, whether it closes its groups on a session change, which
@@ -322,14 +351,22 @@ pub(crate) fn clock_cfg_of(p: &ClockPolicy<'_>) -> Result<ClockCfg, String> {
             None,
         ));
     }
+    let skip_step_back = match parse_step_back(who, p.on_step_back, p.clock.is_some()) {
+        Ok(skip) => skip,
+        Err(msg) => {
+            no.refuse(msg);
+            false
+        }
+    };
     no.finish()?;
     Ok(ClockCfg {
         // A row-count clock steps by one row and has no cap.
         gap_cap: p.gap_cap.map_or(f64::INFINITY, Span::value),
-        on_clock_reset: if p.restart_after_step_back.is_some() {
-            OnClockReset::ResetState
-        } else {
-            OnClockReset::Error
+        on_clock_reset: match (skip_step_back, p.restart_after_step_back.is_some()) {
+            (false, false) => OnClockReset::Error,
+            (false, true) => OnClockReset::ResetState,
+            (true, false) => OnClockReset::Skip,
+            (true, true) => OnClockReset::SkipOrReset,
         },
         session_gap,
         min_backwards_jump: p.restart_after_step_back.map_or(0.0, Span::value),

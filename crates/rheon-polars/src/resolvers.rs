@@ -96,6 +96,7 @@ fn resolver_config(spec: &Spec) -> WindowsConfig {
         clock: spec.clock.clone(),
         gap_cap: spec.gap_cap.clone(),
         restart_after_step_back: spec.restart_after_step_back.clone(),
+        on_step_back: spec.on_step_back.clone(),
         session: spec.session.clone(),
         session_gap: spec.session_gap.clone(),
         group: None,

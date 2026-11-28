@@ -113,7 +113,7 @@ reference gives each one's units and default.
 |---|---|---|
 | which columns a model reads, and what its output column is called | the spec's name, `targets`, `features`, `fit_intercept` | [What a spec names](#what-a-spec-names) |
 | how far apart two rows are, and how fast the past fades | `clock`, `half_life`, `lam`, `gap_cap` | [The clock and its units](#the-clock-and-its-units), and [Time and decay](explanation/time-and-decay.md) for why |
-| what a session boundary, a gap and a step back do | `session`, `session_gap`, `gap_cap`, `restart_after_step_back` | [The clock's policy](#the-clocks-policy) |
+| what a session boundary, a gap and a step back do | `session`, `session_gap`, `gap_cap`, `restart_after_step_back`, `on_step_back` | [The clock's policy](#the-clocks-policy) |
 | what a fit becomes when nothing fades | `half_life=inf`, `lam=1.0` | [Without a decay](explanation/time-and-decay.md#without-a-decay) |
 | when an old row stops counting at all | `window_size`, in the models [A hard window](#a-hard-window) names | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | how to fit along a feature instead of time | `clock` | [Fit locally along a feature](how-to/fit-locally-along-a-feature.md) |
@@ -225,7 +225,7 @@ effect on a fit:
 |---|---|---|
 | a **session** boundary, such as the start of a trading day, where the clock's jump is not elapsed time | `session`, a column whose value changes at a session boundary, and `session_gap`, required with it unless `group_close="session"` closes the group at the change instead ([Close groups and read each one's row](how-to/close-groups.md)) | applies a step you choose, `session_gap`, in place of the jump, capped at `gap_cap` like any step. `session_gap="reset"` starts the model over instead |
 | a **gap** in the clock, such as an hour with no rows | `gap_cap`, required with a clock, finite and above 0 | caps each step between two rows a model learns from, so a quiet hour ages the fit no more than `gap_cap` would. After a run of skipped rows, the next row's step is capped too, however long the run |
-| a clock that **steps back**, such as a replayed day | `restart_after_step_back` | resets the model at a step back larger than the setting, and refuses one no larger as a late row. Unset, the default, every step back is refused ([Put rows in clock order](how-to/put-rows-in-clock-order.md)) |
+| a clock that **steps back**, such as a replayed day or a late row | `restart_after_step_back`, `on_step_back` | `on_step_back="error"` (the default) refuses a step back when `restart_after_step_back` is unset, or refuses a step back no larger than `restart_after_step_back` while resetting on a larger one. `on_step_back="skip"` skips stale rows for that group instead (all-null output row, state and clock untouched, counted in `clock_backwards`, one `ReadinessWarning` per chunk) while still resetting on a step back strictly larger than `restart_after_step_back` when set ([Put rows in clock order](how-to/put-rows-in-clock-order.md)) |
 
 **A stream has a *clock break* wherever `gap_cap` shortened a step, and
 wherever the session changes.** A model that keeps past rows by position,

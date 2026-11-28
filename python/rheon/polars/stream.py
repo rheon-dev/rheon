@@ -498,6 +498,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     age: bool = False,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -516,6 +517,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     age: bool = False,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -534,6 +536,7 @@ def refresh_time(
     pairs: bool = False,
     keep: Sequence[str] = (),
     age: bool = False,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -586,6 +589,12 @@ def refresh_time(
     ``age``
         ``True`` adds each series' value's age (Returns), which says how stale
         a point's values are. Default ``False``.
+    ``on_step_back``
+        What to do when a group's clock steps strictly backward: ``"error"``
+        (default) refuses the row, while ``"skip"`` drops the stale row without
+        advancing the group's clock or emitting into the grid, records the
+        per-group count in state, and emits one :class:`~rheon.ReadinessWarning`
+        when any row is dropped.
     ``chunk_size``
         The rows read at a time, at least 1. The default, ``None``, is the
         library's default chunk size. It changes no output.
@@ -801,6 +810,7 @@ def refresh_time(
             f"but it is {value_dtype}. Cast it, such as with pl.col({value!r}).cast(pl.Float64)."
         )
         raise WrongTypeError(msg)
+    skip_step_back = _check_on_step_back(on_step_back, "rp.stream.refresh_time") == "skip"
     checked = _check_chunk_size(chunk_size, "rp.stream.refresh_time")
     rows = checked if checked is not None else _native.default_chunk_size()
     # The two plan checks a bank makes of its input, made here of this one's,
@@ -823,9 +833,11 @@ def refresh_time(
     def build() -> _native.RefreshTime:
         if loaded is not None:
             return _native.RefreshTime.load_bytes(
-                loaded, names, series, clock, value, group, pairs, keep, age
+                loaded, names, series, clock, value, group, pairs, keep, age, skip_step_back
             )
-        return _native.RefreshTime(names, series, clock, value, group, pairs, keep, age)
+        return _native.RefreshTime(
+            names, series, clock, value, group, pairs, keep, age, skip_step_back
+        )
 
     # The schema is what the operator says it is, taken from a run over no
     # rows -- so a name that cannot be a column is reported while the plan is
@@ -875,6 +887,8 @@ def refresh_time(
                 yield from _in_morsels(emit(out))
         # Reached once the input is fed, or the slice is: not on a run the
         # caller abandons, nor one the sampler ended with an error.
+        for notice in rt.take_notices():
+            warnings.warn(ReadinessWarning(notice), stacklevel=_user_stacklevel())
         if save_path is not None:
             rt.save(save_path)
         # As the bank warns (`ConsumedSourceWarning`): no rows at all from a
@@ -1021,6 +1035,7 @@ def bars(
     gap_cap: float | Duration | None = None,
     max_span: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] = "error",
     partial: Literal["keep", "drop"] = "keep",
     group_close: Literal["monotone"] | None = None,
     final: bool = False,
@@ -1091,10 +1106,18 @@ def bars(
         ``session``; at a row whose step from its group's last row is past
         ``gap_cap``; at a row more than ``max_span`` after the bar's first
         row; and at a row whose clock steps back by more than
-        ``restart_after_step_back`` (without it any step back is refused).
+        ``restart_after_step_back`` (without it any step back follows
+        ``on_step_back``).
         A span is a number of clock units, or a duration on a temporal clock.
         A cut also drops the remainder carried, since the carry counts
         thresholds over one unbroken stretch of the stream.
+    ``on_step_back``
+        What to do when a group's clock steps strictly backward without
+        exceeding ``restart_after_step_back``: ``"error"`` (default) refuses
+        the row, while ``"skip"`` drops the stale row without updating any bar
+        or advancing the group's clock, persists per-group drop counts in
+        state, and emits one :class:`~rheon.ReadinessWarning` when any row is
+        dropped.
     ``partial``
         ``"keep"``, the default, emits a bar cut short with ``complete`` false
         and ``thresholds`` 0; ``"drop"`` leaves it out.
@@ -1226,6 +1249,7 @@ def bars(
             f'{who}: kind must be "count", "sum" or "imbalance", but it is {kind!r}. Set kind '
             "to one of those."
         )
+    step_back = _check_on_step_back(on_step_back, who)
     if partial not in ("keep", "drop"):
         raise ValueError(
             f'{who}: partial must be "keep" or "drop", but it is {partial!r}. Set it to one of '
@@ -1345,6 +1369,8 @@ def bars(
         x, text = _restart_setting(value, clock_dtype, who, clock, key)
         if x is not None:
             spans[key] = x
+    if step_back != "error":
+        call["on_step_back"] = step_back
     config = {
         "kind": kind,
         "clock": clock,
@@ -1354,6 +1380,7 @@ def bars(
         "weight": weight,
         "session": session,
         **spans,
+        **({"on_step_back": step_back} if step_back != "error" else {}),
         "keep_partial": partial == "keep",
         "monotone": group_close == "monotone",
         "max_state_bytes": int(max_state_bytes),
@@ -1432,6 +1459,8 @@ def bars(
             if n_rows is not None:
                 out = out.head(n_rows - seen)
             yield from _in_morsels(emit(out))
+        for notice in b.take_step_back_notices():
+            warnings.warn(ReadinessWarning(notice), stacklevel=_user_stacklevel())
         if save_path is not None:
             b.save(save_path)
 
@@ -1458,6 +1487,7 @@ def merge(
     by: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -1472,6 +1502,7 @@ def merge(
     by: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -1485,6 +1516,7 @@ def merge(
     by: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] = "error",
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -1527,12 +1559,18 @@ def merge(
         that a row of one stream reads another stream's latest value and how
         old it is. Default: none.
     ``restart_after_step_back``
-        By default a step back of a stream's clock is refused, as a spec
-        refuses one. If it is set, a step back larger than it starts that
-        stream again, as a new day's rows start a clock again, and one no
-        larger is still refused. A number of clock units, or a duration on a
-        temporal clock (``"1h"``, a ``timedelta`` or ``pl.duration(hours=1)``),
-        at least 0.
+        By default a step back of a stream's clock follows ``on_step_back``.
+        If it is set, a step back larger than it starts that stream again, as a
+        new day's rows start a clock again, and one no larger follows
+        ``on_step_back``. A number of clock units, or a duration on a temporal
+        clock (``"1h"``, a ``timedelta`` or ``pl.duration(hours=1)``), at least
+        0.
+    ``on_step_back``
+        What to do when a stream's or group's clock steps strictly backward
+        without exceeding ``restart_after_step_back``: ``"error"`` (default)
+        refuses the row, while ``"skip"`` drops the stale row without emitting
+        it into the merged stream, persists per-group drop counts in state, and
+        emits one :class:`~rheon.ReadinessWarning` when any row is dropped.
     ``chunk_size``
         The rows read from each stream at a time, at least 1. The default,
         ``None``, is the library's default chunk size. It changes no output.
@@ -1734,7 +1772,8 @@ def merge(
                 f"{who}: carry must name columns, but it holds {c!r}, of type "
                 f"{type(c).__name__}. Name each column to carry as text, as in carry=['bid']."
             )
-    settings = (clock, source, by, restart, restart_text, carried)
+    skip_step_back = _check_on_step_back(on_step_back, who) == "skip"
+    settings = (clock, source, by, restart, restart_text, carried, skip_step_back)
 
     def build() -> _native.Merge:
         if loaded is not None:
@@ -1806,6 +1845,8 @@ def merge(
                 m.push(want, chunk)
         # Reached once the streams are read, or the slice is: not on a run
         # the caller abandons, nor one the merge ended with an error.
+        for notice in m.take_notices():
+            warnings.warn(ReadinessWarning(notice), stacklevel=_user_stacklevel())
         if save_path is not None:
             m.save(save_path)
 
@@ -1919,11 +1960,27 @@ def _restart_setting(
     return x, ("inf" if math.isinf(x) else repr(value) if isinstance(value, float) else str(value))
 
 
+def _check_on_step_back(value: Any, who: str) -> Literal["error", "skip"]:
+    """Validate ``on_step_back``: must be ``"error"`` or ``"skip"``."""
+    if not isinstance(value, str):
+        raise WrongTypeError(
+            f'{who}: on_step_back must be "error" or "skip", but it is {value!r} '
+            f'({type(value).__name__}). Set on_step_back to "error" or "skip".'
+        )
+    if value not in ("error", "skip"):
+        raise ValueError(
+            f'{who}: on_step_back must be "error" or "skip", but it is {value!r}. Set '
+            'on_step_back to "error" to refuse step-backs, or "skip" to skip stale rows.'
+        )
+    return value  # type: ignore[return-value]
+
+
 #: The clock keywords ``like=`` takes from a spec, and refuses beside it.
 _CLOCK_KEYS = (
     "clock",
     "gap_cap",
     "restart_after_step_back",
+    "on_step_back",
     "session",
     "session_gap",
     "group",
@@ -1950,7 +2007,15 @@ _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 #: The clock keywords of ``with_windows``, reserved: not output names.
-_WINDOW_KEYS = ("clock", "gap_cap", "restart_after_step_back", "session", "session_gap", "group")
+_WINDOW_KEYS = (
+    "clock",
+    "gap_cap",
+    "restart_after_step_back",
+    "on_step_back",
+    "session",
+    "session_gap",
+    "group",
+)
 
 
 def _formulas(who: str, exprs: tuple[Any, ...], named: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2017,6 +2082,7 @@ def with_windows(
     clock: str | None = None,
     gap_cap: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] | None = None,
     session: str | None = None,
     session_gap: float | Duration | None = None,
     group: str | None = None,
@@ -2035,6 +2101,7 @@ def with_windows(
     clock: str | None = None,
     gap_cap: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] | None = None,
     session: str | None = None,
     session_gap: float | Duration | None = None,
     group: str | None = None,
@@ -2052,6 +2119,7 @@ def with_windows(
     clock: str | None = None,
     gap_cap: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] | None = None,
     session: str | None = None,
     session_gap: float | Duration | None = None,
     group: str | None = None,
@@ -2088,9 +2156,18 @@ def with_windows(
         such as ``"5m"``, a ``timedelta``, or an expression that reads no
         column, such as ``pl.duration(minutes=5)``.
     ``restart_after_step_back``
-        By default a step back of the clock is refused. If it is set, a step
-        back larger than it resets every window, and one no larger is still
-        refused. In the units ``gap_cap`` takes. Needs ``clock``.
+        By default a step back of the clock follows ``on_step_back``. If it is
+        set, a step back larger than it resets every window, and one no larger
+        follows ``on_step_back``. In the units ``gap_cap`` takes. Needs
+        ``clock``.
+    ``on_step_back``
+        What to do when the clock steps strictly backward without exceeding
+        ``restart_after_step_back``: ``"error"`` (default when ``None``)
+        refuses the row, while ``"skip"`` keeps the stale row in the output
+        with null formula outputs without feeding it into any window or
+        advancing the clock watermark, persists per-group skipped counts in
+        state, and emits one :class:`~rheon.ReadinessWarning` when any row is
+        skipped. Needs ``clock`` when ``"skip"``.
     ``session``
         A column whose change of value ends every window open across it.
     ``session_gap``
@@ -2355,6 +2432,7 @@ def with_windows(
         "clock": clock,
         "gap_cap": gap_cap,
         "restart_after_step_back": restart_after_step_back,
+        "on_step_back": on_step_back,
         "session": session,
         "session_gap": session_gap,
         "group": group,
@@ -2368,6 +2446,15 @@ def with_windows(
                 f'{key}="{example}", or, for an output column named {key!r}, name the '
                 f"expression with .alias({key!r}) and pass it by position."
             )
+        if key == "on_step_back" and value is not None:
+            if isinstance(value, pl.Expr):
+                raise TypeError(
+                    f'{who}: on_step_back takes "error" or "skip", not an expression. '
+                    'For an output column named "on_step_back", pass it with '
+                    '.alias("on_step_back") by position.'
+                )
+            given[key] = _check_on_step_back(value, who)
+            continue
         if isinstance(value, pl.Expr):
             # gap_cap, restart_after_step_back and session_gap: each a span
             # of the clock, which takes a duration expression as a spec's
@@ -2511,6 +2598,8 @@ def with_windows(
         # slice -- asked for, satisfied or not (review R5, C2) -- the state
         # records the rows of the input consumed so far, and a run resumed
         # on that input skips them (review R2, W4; R4, B1; R5, C1).
+        for notice in w.take_notices():
+            warnings.warn(ReadinessWarning(notice), stacklevel=_user_stacklevel())
         if save_path is not None:
             w.save(save_path, w.consumed() if n_rows is not None else 0, not sliced)
         # As the bank warns (`ConsumedSourceWarning`): no rows at all from a

@@ -221,6 +221,7 @@ fn build_legacy_placeholder_core(cfg: &WindowsConfig, df: &DataFrame) -> Windows
         clock: cfg.clock.as_deref(),
         gap_cap: cfg.gap_cap.as_ref(),
         restart_after_step_back: cfg.restart_after_step_back.as_ref(),
+        on_step_back: cfg.on_step_back.as_deref(),
         session: cfg.session.as_deref(),
         session_gap: cfg.session_gap.as_ref(),
         spec_closes_on_session: None,
@@ -607,4 +608,63 @@ fn legacy_v9_to_v14_row_only_states_load_continue_to_the_bit_and_resave_without_
         .err()
         .expect("v15 empty core for window op refused");
     assert!(err.contains("damaged"), "v15 missing ops: {err}");
+}
+
+/// STATE-3: damaged `stale_seqs` / `skipped_step_back` invariants and
+/// `on_step_back` policy mismatches on load are refused cleanly.
+#[test]
+fn damaged_step_back_state_and_policy_mismatch_are_refused() {
+    let skip_cfg: WindowsConfig = serde_json::from_str(
+        r#"{"formulas": [{"name": "ahead", "tree": ["rewm_mean", ["col", "x"], {"half_life": 5.0, "window_size": 10.0}]}],
+            "clock": "t", "gap_cap": 100.0, "on_step_back": "skip"}"#,
+    )
+    .unwrap();
+    let err_cfg: WindowsConfig = serde_json::from_str(
+        r#"{"formulas": [{"name": "ahead", "tree": ["rewm_mean", ["col", "x"], {"half_life": 5.0, "window_size": 10.0}]}],
+            "clock": "t", "gap_cap": 100.0}"#,
+    )
+    .unwrap();
+    // Stale row at t = 4.0 while forward window keeps it held across the save.
+    let df = df!("t" => [1.0, 5.0, 4.0, 6.0], "x" => [10.0, 20.0, 99.0, 30.0]).unwrap();
+    let mut run = WindowsRun::new(skip_cfg.clone(), df.schema()).unwrap();
+    let _ = run.feed(&df, None).unwrap();
+    assert_eq!(run.total_skipped_step_back(), 1);
+    let bytes = run.save_bytes().unwrap();
+
+    // Policy mismatch on load: skip state loaded as error, and error state loaded as skip.
+    let mismatch = WindowsRun::load_bytes(&bytes, err_cfg.clone(), df.schema())
+        .err()
+        .expect("skip state must refuse error call");
+    assert!(mismatch.contains("on_step_back"), "{mismatch}");
+
+    let mono = df!("t" => [1.0, 5.0, 6.0], "x" => [10.0, 20.0, 30.0]).unwrap();
+    let mut err_run = WindowsRun::new(err_cfg.clone(), mono.schema()).unwrap();
+    let _ = err_run.feed(&mono, None).unwrap();
+    let err_bytes = err_run.save_bytes().unwrap();
+    let mismatch2 = WindowsRun::load_bytes(&err_bytes, skip_cfg.clone(), mono.schema())
+        .err()
+        .expect("error state must refuse skip call");
+    assert!(mismatch2.contains("on_step_back"), "{mismatch2}");
+
+    // Damaged stale_seqs in a skip state are refused as damaged.
+    let skip_file: FileIn = rmp_serde::from_slice(&bytes).unwrap();
+    for what in ["stale_oob", "stale_dup", "stale_open"] {
+        let mut core = skip_file.core.clone();
+        core.damage(what);
+        let damaged = encode_version(&skip_file, &core, WINDOWS_VERSION);
+        let e = WindowsRun::load_bytes(&damaged, skip_cfg.clone(), df.schema())
+            .err()
+            .expect("damaged stale_seqs must be refused");
+        assert!(e.contains("damaged"), "{what}: {e}");
+    }
+
+    // Crafted error state carrying non-zero skipped_step_back is refused as damaged.
+    let err_file: FileIn = rmp_serde::from_slice(&err_bytes).unwrap();
+    let mut core = err_file.core.clone();
+    core.damage("stale_under_error");
+    let damaged = encode_version(&err_file, &core, WINDOWS_VERSION);
+    let e = WindowsRun::load_bytes(&damaged, err_cfg, mono.schema())
+        .err()
+        .expect("skipped_step_back under error policy must be refused");
+    assert!(e.contains("damaged"), "{e}");
 }

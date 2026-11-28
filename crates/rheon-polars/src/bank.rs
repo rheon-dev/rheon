@@ -27,7 +27,6 @@ use crate::rows::{FeatureCol, FeatureCols, FeatureRows};
 use crate::spec::{ModelKind, Spec};
 use crate::stream::{
     AnyModel, ChunkOut, ClockDtype, ClockRefusal, StepRefusal, Stream, StreamState, combo_labels,
-    last_accepted,
 };
 use crate::summary::{DataSummary, Role, SummaryRow, counts, describe_frame, summary_frame};
 use crate::windows_frame::WindowsRun;
@@ -1286,7 +1285,17 @@ fn process<'s>(
             };
             // The group's last accepted row in the chunk, which `coef` rides
             // on without a cadence, whichever run or session span it is in.
-            let coef_at = last_accepted(&sc.features, sc.weight.as_deref(), base, idx.len());
+            let coef_at = crate::stream::last_accepted_for_chunk(
+                stream,
+                &cfgs[si],
+                &sc.features,
+                sc.clock.as_ref(),
+                sc.session.as_deref(),
+                sc.weight.as_deref(),
+                &bounds,
+                base,
+                idx.len(),
+            );
             // The run's features as rows, copied from the columns just before
             // the run is learned and read from cache, one buffer reused run
             // after run (docs/records/PERFORMANCE-LOG.md §42).
@@ -1312,9 +1321,11 @@ fn process<'s>(
                     // ended (task 333). Each names the closed span, whose
                     // session value the stream still holds (task 334).
                     let held = stream.take_notices(spec);
+                    let held_skipped = stream.take_skipped_step_back();
                     *stream = Stream::new_for(spec, crate::stream::draw_group_hash(spec, key))
                         .expect("the spec built this stream once");
                     stream.carry_notices(held);
+                    stream.carry_skipped_step_back(held_skipped);
                     // The group's reservation is the one it was given when
                     // the bank first saw it (`reserve_refits`).
                     if over {
@@ -3639,6 +3650,7 @@ impl Bank {
                 .check_steps(
                     &cfgs[*si],
                     sc.clock.as_ref(),
+                    sc.session.as_deref(),
                     sc.weight.as_deref(),
                     idx,
                     *base,
@@ -4052,16 +4064,52 @@ impl Bank {
         // keep what such a call left them (task 340).
         for (si, hm) in self.states.iter_mut().enumerate() {
             let spec = &self.specs[si];
+            let mut skipped_rows = 0u64;
+            let mut skipped_groups = 0u64;
             if notices_left {
                 for (key, stream) in hm.iter_mut() {
                     say_notices(&mut self.notices, spec, key, stream);
+                    let n = stream.take_skipped_step_back();
+                    if n > 0 {
+                        skipped_rows = skipped_rows.saturating_add(n);
+                        skipped_groups += 1;
+                    }
                 }
             } else {
                 for &at in &places[si] {
                     if let Some((key, stream)) = hm.get_index_mut(at) {
                         say_notices(&mut self.notices, spec, key, stream);
+                        let n = stream.take_skipped_step_back();
+                        if n > 0 {
+                            skipped_rows = skipped_rows.saturating_add(n);
+                            skipped_groups += 1;
+                        }
                     }
                 }
+            }
+            if skipped_rows > 0 {
+                let row_word = if skipped_rows == 1 { "row" } else { "rows" };
+                let msg = if spec.group.is_some() {
+                    let grp_word = if skipped_groups == 1 {
+                        "group"
+                    } else {
+                        "groups"
+                    };
+                    format!(
+                        "spec {:?}: skipped {skipped_rows} stale {row_word} across \
+                         {skipped_groups} {grp_word} under on_step_back=\"skip\" (clock stepped \
+                         backward; output rows left null and model state unchanged).",
+                        spec.name
+                    )
+                } else {
+                    format!(
+                        "spec {:?}: skipped {skipped_rows} stale {row_word} under \
+                         on_step_back=\"skip\" (clock stepped backward; output rows left null and \
+                         model state unchanged).",
+                        spec.name
+                    )
+                };
+                self.notices.push(msg);
             }
         }
         self.notices_left = false;

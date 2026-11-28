@@ -255,9 +255,10 @@ fn stream_settings(spec: &Spec, stream: &Stream, model: &AnyModel) -> Value {
 fn clock(c: &ClockCfg) -> Result<Value, String> {
     Ok(json!({
         "gap_cap": number(c.gap_cap),
+        "on_step_back": if c.on_clock_reset.skips() { "skip" } else { "error" },
         "restart_after_step_back": match c.on_clock_reset {
-            OnClockReset::Error => Value::Null,
-            OnClockReset::ResetState => number(c.min_backwards_jump),
+            OnClockReset::Error | OnClockReset::Skip => Value::Null,
+            OnClockReset::ResetState | OnClockReset::SkipOrReset => number(c.min_backwards_jump),
         },
         "session_gap": match c.session_gap {
             None => Value::Null,

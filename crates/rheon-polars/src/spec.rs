@@ -2227,6 +2227,12 @@ pub struct Spec {
     /// 2026-09-28; one name since task 144).
     #[serde(default)]
     pub restart_after_step_back: Option<Span>,
+    /// What to do when a group's clock steps strictly backward within a
+    /// session (`"error"`, the default, or `"skip"`). Composes with
+    /// `restart_after_step_back`: steps `<= T` follow this policy, while steps
+    /// `> T` restart state. Needs `clock` when `"skip"`.
+    #[serde(default, skip_serializing_if = "clock::is_default_step_back")]
+    pub on_step_back: Option<String>,
     #[serde(default)]
     pub session: Option<String>,
     #[serde(default)]
@@ -2732,6 +2738,9 @@ impl Spec {
         if self.drift_action.is_none() {
             self.drift_action = Some("flag".into());
         }
+        if self.on_step_back.as_deref() == Some("error") {
+            self.on_step_back = None;
+        }
     }
 
     /// Does this spec close a group when its `session` value changes
@@ -2980,6 +2989,7 @@ impl Spec {
             clock: self.clock.as_deref(),
             gap_cap: self.gap_cap.as_ref(),
             restart_after_step_back: self.restart_after_step_back.as_ref(),
+            on_step_back: self.on_step_back.as_deref(),
             session: self.session.as_deref(),
             session_gap: self.session_gap.as_ref(),
             spec_closes_on_session: Some(self.closes_on_session()),

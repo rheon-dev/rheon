@@ -1429,6 +1429,7 @@ pub fn bars_config(id: &str) -> BarsConfig {
         gap_cap: None,
         max_span: None,
         restart_after_step_back: None,
+        on_step_back: None,
         keep_partial: true,
         monotone: false,
         max_state_bytes: 256 * 1024,

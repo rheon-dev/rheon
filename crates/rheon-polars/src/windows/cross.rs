@@ -500,11 +500,20 @@ impl Cross {
     }
 
     /// That each ordering operator keeps a value and a weight for every row
-    /// of the open stamp, `[first, next_seq)`, and its stamp before as a
-    /// table of distinct values ascending, each counting more rows than the
-    /// last.
-    pub(super) fn check_rows(&self, next_seq: u64) -> Result<(), String> {
-        let open = self.open.map_or(0, |(_, first)| next_seq - first) as usize;
+    /// of the open stamp, `[first, next_seq)` excluding skipped stale rows,
+    /// and its stamp before as a table of distinct values ascending, each
+    /// counting more rows than the last.
+    pub(super) fn check_rows(
+        &self,
+        next_seq: u64,
+        stale: &std::collections::VecDeque<u64>,
+    ) -> Result<(), String> {
+        let is_stale = |s: u64| !stale.is_empty() && stale.binary_search(&s).is_ok();
+        let open_seqs: Vec<u64> = self.open.map_or_else(Vec::new, |(_, first)| {
+            (first..next_seq).filter(|&s| !is_stale(s)).collect()
+        });
+        let open = open_seqs.len();
+        let first = self.open.map_or(next_seq, |(_, f)| f);
         for (j, def) in self.defs.iter().enumerate() {
             let kept = if def.neighbors.is_some() {
                 Some(self.nb_open[j].len())
@@ -520,15 +529,14 @@ impl Cross {
                     "its cross-group operator {j} keeps {kept} rows of a stamp of {open}"
                 ));
             }
-            let first = next_seq - open as u64;
             let t = &self.prev_rows[j];
             let in_order = t.windows(2).all(|p| p[0].0 < p[1].0 && p[0].1 < p[1].1)
                 && t.first().is_none_or(|f| f.1 >= 1.0)
                 && self.nb_open[j]
                     .iter()
-                    .enumerate()
-                    .all(|(k, r)| r.seq == first + k as u64)
-                && self.refs[j].is_none_or(|(s, _)| s >= first && s < next_seq)
+                    .zip(&open_seqs)
+                    .all(|(r, &s)| r.seq == s)
+                && self.refs[j].is_none_or(|(s, _)| s >= first && s < next_seq && !is_stale(s))
                 && self.nb_prev[j]
                     .windows(2)
                     .all(|p| (p[0].0, p[0].1) < (p[1].0, p[1].1));
@@ -551,9 +559,10 @@ impl Cross {
         broke: bool,
         rows: &mut Rows<'_>,
         seq: u64,
+        stale: &std::collections::VecDeque<u64>,
     ) {
         if reset {
-            self.end(rows, seq, false);
+            self.end(rows, seq, false, stale);
             self.forget_prev();
             return;
         }
@@ -562,7 +571,7 @@ impl Cross {
             None => true,
         };
         if new_stamp {
-            self.end(rows, seq, true);
+            self.end(rows, seq, true, stale);
             if broke {
                 self.forget_prev();
             }
@@ -639,25 +648,37 @@ impl Cross {
     }
 
     /// The end of the input: the open stamp closes.
-    pub(super) fn finish(&mut self, rows: &mut Rows<'_>, next_seq: u64) {
-        self.end(rows, next_seq, true);
+    pub(super) fn finish(
+        &mut self,
+        rows: &mut Rows<'_>,
+        next_seq: u64,
+        stale: &std::collections::VecDeque<u64>,
+    ) {
+        self.end(rows, next_seq, true, stale);
     }
 
-    /// End the open stamp, whose rows are `[first, until)`: with `close`,
-    /// its values go to its rows under `"right"` and become the stamp
-    /// before under `"left"` (where it had a weighted row); without, its
-    /// rows read null. Either way its rows stop waiting.
-    fn end(&mut self, rows: &mut Rows<'_>, until: u64, close: bool) {
+    /// End the open stamp, whose rows are `[first, until)` excluding skipped
+    /// stale rows: with `close`, its values go to its rows under `"right"` and
+    /// become the stamp before under `"left"` (where it had a weighted row);
+    /// without, its rows read null. Either way its rows stop waiting.
+    fn end(
+        &mut self,
+        rows: &mut Rows<'_>,
+        until: u64,
+        close: bool,
+        stale: &std::collections::VecDeque<u64>,
+    ) {
         let Some((_, first)) = self.open.take() else {
             return;
         };
+        let is_stale = |seq: u64| !stale.is_empty() && stale.binary_search(&seq).is_ok();
         let waits = self.waits();
         for (j, def) in self.defs.iter().enumerate() {
             let out = self.first_out + j;
             if def.pick.is_some() {
                 let read = self.refs[j].take().map_or(f64::NAN, |r| r.1);
                 if def.closed == CrossClosed::Right {
-                    for seq in first..until {
+                    for seq in (first..until).filter(|&s| !is_stale(s)) {
                         let at = rows.slot(seq, out);
                         rows.values[at] = if close { read } else { f64::NAN };
                     }
@@ -676,7 +697,7 @@ impl Cross {
                     } else {
                         vec![f64::NAN; stamp.len()]
                     };
-                    for (k, seq) in (first..until).enumerate() {
+                    for (k, seq) in (first..until).filter(|&s| !is_stale(s)).enumerate() {
                         let at = rows.slot(seq, out);
                         rows.values[at] = read[k];
                     }
@@ -690,7 +711,7 @@ impl Cross {
                 let members = order::members(&stamp);
                 if def.closed == CrossClosed::Right {
                     let read = order::read(&stamp, &members, def);
-                    for (k, seq) in (first..until).enumerate() {
+                    for (k, seq) in (first..until).filter(|&s| !is_stale(s)).enumerate() {
                         let r = (seq - rows.first) as usize;
                         rows.values[r * rows.n_outputs + self.first_out + j] =
                             if close { read[k] } else { f64::NAN };
@@ -707,7 +728,7 @@ impl Cross {
             let acc = self.acc[j];
             let v = if close { acc.value(def) } else { f64::NAN };
             if def.closed == CrossClosed::Right {
-                for seq in first..until {
+                for seq in (first..until).filter(|&s| !is_stale(s)) {
                     let r = (seq - rows.first) as usize;
                     rows.values[r * rows.n_outputs + self.first_out + j] = v;
                 }
@@ -716,7 +737,7 @@ impl Cross {
             }
         }
         if waits {
-            for seq in first..until {
+            for seq in (first..until).filter(|&s| !is_stale(s)) {
                 rows.meta[(seq - rows.first) as usize].open -= 1;
             }
         }

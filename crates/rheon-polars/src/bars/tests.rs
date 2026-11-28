@@ -17,6 +17,7 @@ fn cfg(kind: BarKind, quantity: Option<&str>, theta: f64) -> BarsConfig {
         gap_cap: None,
         max_span: None,
         restart_after_step_back: None,
+        on_step_back: None,
         keep_partial: true,
         monotone: false,
         max_state_bytes: 256 * 1024,
@@ -272,4 +273,66 @@ fn finish_emits_each_open_bar_and_leaves_none() {
     assert_eq!(rows, 20);
     assert!(b.groups.values().all(|g| g.rows == 0));
     assert_eq!(b.finish().unwrap().height(), 0);
+}
+
+/// STATE-3: `on_step_back` mismatch and malformed `skipped_step_back`
+/// tables in a bars state file are refused cleanly.
+#[test]
+fn damaged_step_back_state_and_policy_mismatch_are_refused() {
+    let df = df!(
+        "t" => [1i64, 5, 3, 6],
+        "g" => ["a", "a", "a", "a"],
+        "x" => [1.0, 2.0, 9.0, 3.0],
+        "q" => [1.0, 1.0, 1.0, 1.0],
+        "n" => [1i64, 1, 1, 1],
+    )
+    .unwrap();
+    let mut skip_cfg = cfg(BarKind::Count, None, 10.0);
+    skip_cfg.on_step_back = Some("skip".into());
+    let mut b = Bars::new(skip_cfg.clone(), df.schema()).unwrap();
+    let _ = b.feed(&df, None).unwrap();
+    assert_eq!(b.total_skipped_step_back(), 1);
+    let bytes = b.save_bytes().unwrap();
+
+    // Policy mismatch on load.
+    let err_cfg = cfg(BarKind::Count, None, 10.0);
+    let e = Bars::load_bytes(&bytes, err_cfg.clone(), df.schema()).unwrap_err();
+    assert!(e.contains("on_step_back"), "{e}");
+
+    let reseal = |mut f: BarsFile, load_cfg: BarsConfig, schema: &Schema| -> String {
+        f.checksum = Some(crate::checksum::Trailer::Patched);
+        let mut raw = rmp_serde::to_vec_named(&f).unwrap();
+        crate::checksum::seal(&mut raw);
+        Bars::load_bytes(&raw, load_cfg, schema)
+            .err()
+            .unwrap_or_default()
+    };
+
+    // 1) Zero count.
+    let mut f: BarsFile = rmp_serde::from_slice(&bytes).unwrap();
+    f.skipped_step_back = vec![(GroupKey(Some("a".into())), 0)];
+    assert!(reseal(f, skip_cfg.clone(), df.schema()).contains("the state is damaged"));
+
+    // 2) Duplicate group key.
+    let mut f: BarsFile = rmp_serde::from_slice(&bytes).unwrap();
+    f.skipped_step_back = vec![
+        (GroupKey(Some("a".into())), 1),
+        (GroupKey(Some("a".into())), 2),
+    ];
+    assert!(reseal(f, skip_cfg.clone(), df.schema()).contains("the state is damaged"));
+
+    // 3) Non-empty skipped_step_back under on_step_back = "error".
+    let mut f: BarsFile = rmp_serde::from_slice(&bytes).unwrap();
+    f.config.on_step_back = None;
+    assert!(reseal(f, err_cfg, df.schema()).contains("the state is damaged"));
+
+    // 4) Non-null group key in ungrouped bars.
+    let mut u_cfg = cfg(BarKind::Count, None, 10.0);
+    u_cfg.group = None;
+    u_cfg.on_step_back = Some("skip".into());
+    let mut bu = Bars::new(u_cfg.clone(), df.schema()).unwrap();
+    let _ = bu.feed(&df, None).unwrap();
+    let mut f: BarsFile = rmp_serde::from_slice(&bu.save_bytes().unwrap()).unwrap();
+    f.skipped_step_back = vec![(GroupKey(Some("a".into())), 1)];
+    assert!(reseal(f, u_cfg, df.schema()).contains("the state is damaged"));
 }

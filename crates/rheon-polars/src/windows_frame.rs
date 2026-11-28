@@ -43,7 +43,7 @@ mod defs;
 mod load_tests;
 use defs::{list_keys, moments_def, neighbor_list, profile_def, stl_def};
 mod rows;
-use rows::{RowOp, RowState, step_increments};
+use rows::{IncrPolicy, RowOp, RowState, step_increments};
 
 /// The spec behind `like=`: its name, for messages, and the columns whose
 /// values must all be usable for it to learn from a row -- its features and
@@ -67,6 +67,8 @@ pub struct WindowsConfig {
     pub gap_cap: Option<Span>,
     #[serde(default)]
     pub restart_after_step_back: Option<Span>,
+    #[serde(default, skip_serializing_if = "crate::spec::is_default_step_back")]
+    pub on_step_back: Option<String>,
     #[serde(default)]
     pub session: Option<String>,
     #[serde(default)]
@@ -1153,6 +1155,9 @@ fn same_call(config: &WindowsConfig) -> WindowsConfig {
     if matches!(c.session_gap, Some(SessionGapSpec::Gap(_))) {
         c.session_gap = None;
     }
+    if c.on_step_back.as_deref() == Some("error") {
+        c.on_step_back = None;
+    }
     c
 }
 
@@ -1193,6 +1198,12 @@ fn call_differences(saved: &WindowsConfig, now: &WindowsConfig) -> String {
             saved.restart_after_step_back != now.restart_after_step_back,
             text(saved.restart_after_step_back.as_ref()),
             text(now.restart_after_step_back.as_ref()),
+        ),
+        (
+            "on_step_back",
+            saved.on_step_back != now.on_step_back,
+            text(saved.on_step_back.as_ref()),
+            text(now.on_step_back.as_ref()),
         ),
         (
             "session",
@@ -1446,11 +1457,13 @@ impl WindowsRun {
             )
             .into());
         }
+        let mut config = config;
         let cfg: ClockCfg = clock_cfg_of(&ClockPolicy {
             who: WHO,
             clock: config.clock.as_deref(),
             gap_cap: config.gap_cap.as_ref(),
             restart_after_step_back: config.restart_after_step_back.as_ref(),
+            on_step_back: config.on_step_back.as_deref(),
             session: config.session.as_deref(),
             session_gap: config.session_gap.as_ref(),
             spec_closes_on_session: None,
@@ -1463,6 +1476,9 @@ impl WindowsRun {
                 .iter()
                 .any(|f| f.tree.has_forward_operator()),
         })?;
+        if config.on_step_back.as_deref() == Some("error") {
+            config.on_step_back = None;
+        }
         let mut p = plan(&config, input)?;
         check_scale(&config, &p.spans, input)?;
         let accept = config
@@ -1876,6 +1892,12 @@ impl WindowsRun {
                          them, starts there too. Resume on the input the state was \
                          saved from, whole, or on the next file, which starts after the last \
                          clock value the state read."
+                    ),
+                    Ok(Peek::StepBack) => polars_bail!(ComputeError:
+                        "{WHO}: the state was saved from a slice of its input, and this is \
+                         another input: it starts before the last row the state read. Resume on \
+                         the input the state was saved from, whole, or on the next file, which \
+                         starts after the last row the state read."
                     ),
                     // The policy's own words beside the rule's (review R8, F2):
                     // under `group` a next-day file's step back is refused on
@@ -2422,17 +2444,17 @@ impl WindowsRun {
     }
 
     /// The clock policy's reading of a step back: the span past which it is
-    /// a new start, and whether a step back starts anew at all; and the gap
-    /// past which a drift's stretch ends (task 564).
-    fn restart_policy(&self) -> (f64, bool, f64) {
-        (
-            self.core.clock_cfg().min_backwards_jump,
-            matches!(
-                self.core.clock_cfg().on_clock_reset,
-                rheon_core::OnClockReset::ResetState
-            ),
-            self.core.clock_cfg().gap_cap,
-        )
+    /// a new start, whether a step back starts anew or skips stale rows, the
+    /// gap past which a drift's stretch ends, and whether groups are present.
+    fn restart_policy(&self) -> IncrPolicy {
+        let cfg = self.core.clock_cfg();
+        IncrPolicy {
+            restart: cfg.min_backwards_jump,
+            restarts: cfg.on_clock_reset.resets(),
+            skips: cfg.on_clock_reset.skips(),
+            gap_cap: cfg.gap_cap,
+            grouped: self.k.config.group.is_some(),
+        }
     }
 
     /// The increments' values as the hidden columns they stand in as.
@@ -2772,6 +2794,39 @@ impl WindowsRun {
         }
     }
 
+    /// Summary notices for stale rows skipped under `on_step_back = "skip"`,
+    /// drained once per call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        let Some((rows, groups)) = self.core.take_step_back_counts() else {
+            return Vec::new();
+        };
+        let row_word = if rows == 1 { "row" } else { "rows" };
+        let msg = if self.k.config.group.is_some() {
+            let grp_word = if groups == 1 { "group" } else { "groups" };
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} across {groups} {grp_word} under \
+                 on_step_back=\"skip\" (clock stepped backward; formula outputs left null and \
+                 window state unchanged)."
+            )
+        } else {
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} under on_step_back=\"skip\" (clock \
+                 stepped backward; formula outputs left null and window state unchanged)."
+            )
+        };
+        vec![msg]
+    }
+
+    /// Persisted stale-row skip total across all groups.
+    pub fn total_skipped_step_back(&self) -> u64 {
+        self.core.total_skipped_step_back()
+    }
+
+    /// Persisted stale-row skip counts by group key.
+    pub fn skipped_step_back_by_group(&self) -> Vec<(Option<String>, u64)> {
+        self.core.skipped_step_back_by_group()
+    }
+
     /// The first row to take a cross-group operator or a profile past half
     /// of its `max_state_bytes`, once a run, as the warning a caller raises.
     pub fn take_warning(&mut self) -> Option<String> {
@@ -2933,11 +2988,18 @@ impl WindowsRun {
     /// them, less the dropped ones and the hidden columns.
     fn assemble(&mut self, e: crate::windows::Emitted) -> PolarsResult<DataFrame> {
         let drop = e.drop.clone();
+        let mut stale = e.stale.clone();
         let mut frame = self.assemble_rows(e)?;
         if drop.iter().any(|&d| d) {
             let keep: BooleanChunked = drop.iter().map(|&d| Some(!d)).collect();
             frame = frame.filter(&keep)?;
+            stale = stale
+                .into_iter()
+                .zip(&drop)
+                .filter_map(|(s, &d)| (!d).then_some(s))
+                .collect();
         }
+        let any_stale = stale.iter().any(|&s| s);
         // A formula that is only an operator's values is its hidden column
         // under the formula's name: no plan of the lazy engine for it, which
         // costs 100 to 150 microseconds a chunk whatever the chunk holds.
@@ -2958,6 +3020,10 @@ impl WindowsRun {
             }
             return DataFrame::new(frame.height(), cols);
         }
+        if any_stale {
+            let mask: BooleanChunked = stale.iter().map(|&s| Some(s)).collect();
+            frame.hstack_mut(&[mask.with_name("@po:stale".into()).into_column()])?;
+        }
         // Pass four: the formulas, over the rows with their operators.
         let exprs: Vec<Expr> = self
             .k
@@ -2965,9 +3031,13 @@ impl WindowsRun {
             .formulas
             .iter()
             .map(|f| {
-                f.tree
-                    .to_expr(&|op| col(hidden(op).as_str()))
-                    .alias(f.name.as_str())
+                let expr = f.tree.to_expr(&|op| col(hidden(op).as_str()));
+                let expr = if any_stale {
+                    when(col("@po:stale")).then(lit(NULL)).otherwise(expr)
+                } else {
+                    expr
+                };
+                expr.alias(f.name.as_str())
             })
             .collect();
         // The input's columns the chunk has (a projection may have narrowed

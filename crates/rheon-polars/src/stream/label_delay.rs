@@ -347,6 +347,7 @@ impl Stream {
             blend: row.blend,
             session_changed: row.session_changed,
             backwards: false,
+            stale: false,
             capped: row.capped,
             accept: true,
             want_coef: false,
@@ -393,6 +394,7 @@ impl Stream {
             // is made by a row of this group in this chunk, so it is never
             // left for a later one.
             if !plan.reset
+                && !plan.stale
                 && let Some(res) = formulas.and_then(|f| f.resolved)
             {
                 let f = formulas.expect("checked");
@@ -434,6 +436,12 @@ impl Stream {
                         weightless::read_stamp(lr.learned, &lr.cfg, &lr.caps, plan.clock, None);
                 }
                 out.push(plan);
+                continue;
+            }
+            if plan.stale {
+                // A stale step-back row leaves all state, label buffers, and
+                // held breaks completely untouched.
+                out.push(quiet);
                 continue;
             }
             if !plan.accept {
@@ -668,6 +676,7 @@ impl Stream {
                 blend: false,
                 session_changed: false,
                 backwards: false,
+                stale: false,
                 capped: adv.capped,
                 accept: true,
                 want_coef: false,

@@ -2123,6 +2123,7 @@ fn merge_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
         restart: None,
         restart_text: None,
         carry: vec!["x".into(), "s".into()],
+        skip_step_back: false,
     };
     let mut merge = Merge::new(
         vec!["in".into()],

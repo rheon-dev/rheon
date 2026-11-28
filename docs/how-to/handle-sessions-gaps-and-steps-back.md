@@ -31,7 +31,7 @@ each, and together they are the clock's *policy*:
 |---|---|---|
 | a **session** boundary, such as the start of a trading day, where the clock's jump is not elapsed time | `session`, a column whose value changes at a session boundary, and `session_gap`, required with it unless `group_close="session"` closes the group at the change instead ([Close groups](close-groups.md)) | applies a step you choose, `session_gap`, in place of the jump, capped at `gap_cap` like any step. `session_gap="reset"` starts the model over instead |
 | a **gap** in the clock, such as an hour with no rows | `gap_cap`, required with a clock, finite and above 0 | caps each step between two rows a model learns from, so a quiet hour ages the fit no more than `gap_cap` would. After a run of skipped rows, the next row's step is capped too, however long the run |
-| a clock that **steps back**, such as a replayed day | `restart_after_step_back` | starts the model over at a step back larger than the setting, and refuses one no larger as a late row. Unset, the default, every step back is refused ([Choose what a step back means](#choose-what-a-step-back-means)) |
+| a clock that **steps back**, such as a replayed day or a late row | `restart_after_step_back`, `on_step_back` | starts the model over at a step back larger than `restart_after_step_back`; refuses a smaller step back (or any step back when `restart_after_step_back` is unset) under `on_step_back="error"`, or skips it as a stale row under `on_step_back="skip"` ([Choose what a step back means](#choose-what-a-step-back-means)) |
 
 **A stream has a [clock break](../GLOSSARY.md#time) wherever `gap_cap`
 shortened a step, and wherever the session changes.** A model that keeps
@@ -121,8 +121,9 @@ row can be, and `0` resets the model at every step back:
 
 | a step back | is read as | and the bank |
 |---|---|---|
-| any size, with `restart_after_step_back` unset, the default | rows not in clock order | refuses the chunk |
-| no larger than `restart_after_step_back` | a late row, such as a transposed pair or a row a minute late | refuses the chunk |
+| any size, with `restart_after_step_back` unset and `on_step_back="error"` (the default) | rows not in clock order | refuses the chunk |
+| any size, with `restart_after_step_back` unset and `on_step_back="skip"` | a stale row for that group | skips the row (all-null output, group state and clock untouched) |
+| no larger than `restart_after_step_back` | a late row, such as a transposed pair or a row a minute late | refuses the chunk under `on_step_back="error"`, or skips the row under `on_step_back="skip"` |
 | larger than `restart_after_step_back` | a new start, such as a replayed day or a feed that started again | resets the model |
 | any size, on a row whose `session` value changes | a new session, where the step is no measure of time | applies `session_gap`, or resets the model under `session_gap="reset"` |
 

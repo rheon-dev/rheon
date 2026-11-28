@@ -13,6 +13,7 @@ pub(super) fn cfg(clock: &str) -> MergeConfig {
         restart: None,
         restart_text: None,
         carry: Vec::new(),
+        skip_step_back: false,
     }
 }
 

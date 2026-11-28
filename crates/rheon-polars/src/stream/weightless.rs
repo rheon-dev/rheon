@@ -74,6 +74,7 @@ impl Stream {
             blend: false,
             session_changed: false,
             backwards: false,
+            stale: false,
             capped: false,
             accept,
             want_coef: false,
@@ -100,7 +101,7 @@ pub(super) fn read_stamp(
     session: Option<u64>,
 ) -> Option<Stamp> {
     let adv = clock.clone().advance_stamped(cfg, caps, c, session, true);
-    if adv.backwards.is_none() {
+    if adv.backwards.is_none() && !adv.skipped_step_back {
         return adv.stamp;
     }
     clock

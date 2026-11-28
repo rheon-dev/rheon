@@ -196,6 +196,14 @@ pub struct RefreshTime {
     /// completing tick's clock less the clock of the tick the value came
     /// from (PLAN 556).
     age: bool,
+    /// Whether backward steps on a group's clock are dropped as stale
+    /// (`on_step_back = "skip"`) rather than refused.
+    skip_step_back: bool,
+    /// Persisted stale-row counts per group under `on_step_back = "skip"`.
+    skipped_step_back: HashMap<GroupKey, u64, FixedState>,
+    /// Transient run counters drained by [`Self::take_notices`].
+    skipped_step_back_run: u64,
+    skipped_groups_run: std::collections::HashSet<GroupKey, FixedState>,
 }
 
 /// A clock value as the order check compares it: a float as itself, an
@@ -294,6 +302,14 @@ struct RefreshFile {
     /// cannot give their ages.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     age: bool,
+    /// True under `on_step_back = "skip"`; absent under `"error"` so existing
+    /// state bytes are untouched.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    skip_step_back: bool,
+    /// Per-group stale rows dropped under `on_step_back = "skip"`, sorted by
+    /// group key; absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skipped_step_back: Vec<(GroupKey, u64)>,
     /// The xxh3-64 of every byte before it (`checksum.rs`), last; read from
     /// the file's last bytes, never by serde.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -417,6 +433,10 @@ impl RefreshTime {
             rows_fed: 0,
             held: None,
             age: false,
+            skip_step_back: false,
+            skipped_step_back: HashMap::default(),
+            skipped_step_back_run: 0,
+            skipped_groups_run: std::collections::HashSet::default(),
         })
     }
 
@@ -427,6 +447,58 @@ impl RefreshTime {
     pub fn with_age(mut self, age: bool) -> Self {
         self.age = age;
         self
+    }
+
+    /// Configure `on_step_back`: `true` drops stale rows whose clock steps
+    /// strictly backward within a group; `false` (default) refuses them.
+    #[must_use]
+    pub fn with_skip_step_back(mut self, skip: bool) -> Self {
+        self.skip_step_back = skip;
+        self
+    }
+
+    /// Summary notices for stale rows dropped under `on_step_back = "skip"`,
+    /// drained once per call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        let rows = std::mem::take(&mut self.skipped_step_back_run);
+        let groups = std::mem::take(&mut self.skipped_groups_run).len();
+        if rows == 0 {
+            return Vec::new();
+        }
+        let row_word = if rows == 1 { "row" } else { "rows" };
+        let msg = if self.grouped == Some(true) {
+            let grp_word = if groups == 1 { "group" } else { "groups" };
+            format!(
+                "rp.stream.refresh_time: skipped {rows} stale {row_word} across {groups} \
+                 {grp_word} under on_step_back=\"skip\" (clock stepped backward; stale rows \
+                 dropped)."
+            )
+        } else {
+            format!(
+                "rp.stream.refresh_time: skipped {rows} stale {row_word} under \
+                 on_step_back=\"skip\" (clock stepped backward; stale rows dropped)."
+            )
+        };
+        vec![msg]
+    }
+
+    /// Total persisted stale rows dropped across all groups.
+    pub fn total_skipped_step_back(&self) -> u64 {
+        self.skipped_step_back
+            .values()
+            .fold(0u64, |acc, &n| acc.saturating_add(n))
+    }
+
+    /// Persisted stale-row counts by group key.
+    pub fn skipped_step_back_by_group(&self) -> Vec<(GroupKey, u64)> {
+        let mut out: Vec<_> = self
+            .skipped_step_back
+            .iter()
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (k.clone(), n))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// The sampler's state as bytes: every group's grid, part-way through
@@ -446,6 +518,13 @@ impl RefreshTime {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         last_time.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut skipped_step_back: Vec<_> = self
+            .skipped_step_back
+            .iter()
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (k.clone(), n))
+            .collect();
+        skipped_step_back.sort_by(|a, b| a.0.cmp(&b.0));
         let file = RefreshFile {
             magic: crate::envelope::MAGIC.into(),
             kind: crate::envelope::Kind::RefreshTime.tag().into(),
@@ -458,6 +537,8 @@ impl RefreshTime {
             last_time,
             held: self.held.clone(),
             age: self.age,
+            skip_step_back: self.skip_step_back,
+            skipped_step_back,
             checksum: Some(crate::checksum::Trailer::Patched),
         };
         let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
@@ -504,6 +585,18 @@ impl RefreshTime {
         pairs: bool,
         grouped: bool,
         age: bool,
+    ) -> Result<Self, String> {
+        Self::load_bytes_with_options(bytes, names, pairs, grouped, age, false)
+    }
+
+    /// [`Self::load_bytes_with_age`] with `on_step_back` (`skip_step_back`).
+    pub fn load_bytes_with_options(
+        bytes: &[u8],
+        names: Vec<String>,
+        pairs: bool,
+        grouped: bool,
+        age: bool,
+        skip_step_back: bool,
     ) -> Result<Self, String> {
         const WHO: &str = "rp.stream.refresh_time";
         const START_OVER: &str = "Load an undamaged copy of the state file, or leave out \
@@ -582,6 +675,8 @@ impl RefreshTime {
                     last_time: old.last_time,
                     held: old.held,
                     age: false,
+                    skip_step_back: false,
+                    skipped_step_back: Vec::new(),
                     checksum: None,
                 }
             }
@@ -627,7 +722,26 @@ impl RefreshTime {
                     .to_string(),
             );
         }
-        let mut rt = Self::new(names, pairs)?.with_age(age);
+        if file.skip_step_back != skip_step_back {
+            let was = if file.skip_step_back { "skip" } else { "error" };
+            let now = if skip_step_back { "skip" } else { "error" };
+            return Err(format!(
+                "rp.stream.refresh_time: the state was saved with on_step_back = {was:?}, but \
+                 this call gives {now:?}. Give on_step_back = {was:?}, as the state was saved, or \
+                 leave out load_state to start over."
+            ));
+        }
+        if !file.skip_step_back && !file.skipped_step_back.is_empty() {
+            return Err(
+                "rp.stream.refresh_time: the state is damaged: it records skipped step-back rows \
+                 under on_step_back=\"error\". Load an undamaged copy of the state file, or leave \
+                 out load_state to start over."
+                    .to_string(),
+            );
+        }
+        let mut rt = Self::new(names, pairs)?
+            .with_age(age)
+            .with_skip_step_back(skip_step_back);
         // One joint grid of every series per group, or one two-series grid
         // per pair, each in a state the scan could have left it in.
         let (n_grids, width) = if rt.pairs.is_empty() {
@@ -668,6 +782,24 @@ impl RefreshTime {
         }
         rt.states = file.states.into_iter().collect();
         rt.last_time = file.last_time.into_iter().collect();
+        for (key, count) in file.skipped_step_back {
+            if count == 0 || (!grouped && key.as_str() != Some("")) {
+                return Err(
+                    "rp.stream.refresh_time: the state is damaged: its skipped step-back counts \
+                     do not match this call. Load an undamaged copy of the state file, or leave \
+                     out load_state to start over."
+                        .to_string(),
+                );
+            }
+            if rt.skipped_step_back.insert(key, count).is_some() {
+                return Err(
+                    "rp.stream.refresh_time: the state is damaged: a group's skipped step-back \
+                     count is held twice. Load an undamaged copy of the state file, or leave out \
+                     load_state to start over."
+                        .to_string(),
+                );
+            }
+        }
         rt.grouped = Some(grouped);
         rt.kind = file.clock_kind;
         if let Some(h) = &file.held {
@@ -1026,6 +1158,14 @@ impl RefreshTime {
             match self.last_time.get_mut(&*key) {
                 Some(prev) => {
                     if t < *prev {
+                        if self.skip_step_back {
+                            let entry = self.skipped_step_back.entry(key.clone()).or_insert(0);
+                            *entry = entry.saturating_add(1);
+                            self.skipped_step_back_run =
+                                self.skipped_step_back_run.saturating_add(1);
+                            self.skipped_groups_run.insert(key.clone());
+                            continue;
+                        }
                         polars_bail!(ComputeError:
                             "rp.stream.refresh_time: clock column {:?} is {} at row {at} \
                              (counting from 0), below the previous row's {} in the same group. \
@@ -2403,5 +2543,85 @@ mod tests {
                 .unwrap_err()
                 .contains("checksum it ends with is missing or cut")
         );
+    }
+
+    /// STATE-3: `on_step_back` mismatch and malformed `skipped_step_back`
+    /// tables in a refresh_time state file are refused cleanly.
+    #[test]
+    fn damaged_step_back_state_and_policy_mismatch_are_refused() {
+        let df = df!(
+            "g" => ["g1", "g1", "g1", "g1"],
+            "s" => ["a", "b", "a", "b"],
+            "t" => [1.0, 2.0, 1.5, 3.0],
+            "v" => [10.0, 20.0, 99.0, 30.0],
+        )
+        .unwrap();
+        let cols = RefreshCols {
+            series: "s",
+            clock: "t",
+            value: "v",
+            group: Some("g"),
+            keep: &[],
+        };
+        let mut rt = RefreshTime::new(ab(), false)
+            .unwrap()
+            .with_skip_step_back(true);
+        let _ = rt.feed(&df, &cols).unwrap();
+        assert_eq!(rt.total_skipped_step_back(), 1);
+        let bytes = rt.save_bytes().unwrap();
+
+        // Policy mismatch on load.
+        let e = RefreshTime::load_bytes_with_options(&bytes, ab(), false, true, false, false)
+            .unwrap_err();
+        assert!(e.contains("on_step_back"), "{e}");
+
+        let reseal = |mut f: RefreshFile, grouped: bool, skip: bool| -> String {
+            f.checksum = Some(crate::checksum::Trailer::Patched);
+            let mut raw = rmp_serde::to_vec_named(&f).unwrap();
+            crate::checksum::seal(&mut raw);
+            RefreshTime::load_bytes_with_options(&raw, ab(), false, grouped, false, skip)
+                .err()
+                .unwrap_or_default()
+        };
+
+        // 1) Zero count.
+        let mut f: RefreshFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skipped_step_back = vec![(GroupKey(Some("g1".into())), 0)];
+        assert!(reseal(f, true, true).contains("the state is damaged"));
+
+        // 2) Duplicate group key.
+        let mut f: RefreshFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skipped_step_back = vec![
+            (GroupKey(Some("g1".into())), 1),
+            (GroupKey(Some("g1".into())), 2),
+        ];
+        assert!(reseal(f, true, true).contains("the state is damaged"));
+
+        // 3) Non-empty skipped_step_back when skip_step_back is false.
+        let mut f: RefreshFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skip_step_back = false;
+        assert!(reseal(f, true, false).contains("the state is damaged"));
+
+        // 4) Non-null group key in ungrouped state.
+        let ungrouped = df!(
+            "s" => ["a", "b", "a"],
+            "t" => [1.0, 2.0, 1.5],
+            "v" => [10.0, 20.0, 99.0],
+        )
+        .unwrap();
+        let ucols = RefreshCols {
+            series: "s",
+            clock: "t",
+            value: "v",
+            group: None,
+            keep: &[],
+        };
+        let mut rtu = RefreshTime::new(ab(), false)
+            .unwrap()
+            .with_skip_step_back(true);
+        let _ = rtu.feed(&ungrouped, &ucols).unwrap();
+        let mut f: RefreshFile = rmp_serde::from_slice(&rtu.save_bytes().unwrap()).unwrap();
+        f.skipped_step_back = vec![(GroupKey(Some("g1".into())), 1)];
+        assert!(reseal(f, false, true).contains("the state is damaged"));
     }
 }
