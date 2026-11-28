@@ -4,9 +4,52 @@
 //! standard errors exist for, and why the others have none. The settings
 //! that read them are `Spec`'s fields; their refusals are `Spec::validate`'s.
 
-use super::{ModelKind, Spec, num_label};
+use super::{FloatOrList, ModelKind, Spec, num_label};
+
+/// Slope constraint built from a spec's `coef_min`, `coef_max` and `coef_sum`:
+/// a scalar bound broadcasts to every feature, a list is taken as given so
+/// wrong lengths reach `Constraint::validate`, and trivial all-unbounded inputs
+/// collapse to `None`.
+pub(crate) fn slope_constraint(
+    k: usize,
+    coef_min: &Option<FloatOrList>,
+    coef_max: &Option<FloatOrList>,
+    coef_sum: Option<f64>,
+) -> Option<rheon_core::Constraint> {
+    if coef_min.is_none() && coef_max.is_none() && coef_sum.is_none() {
+        return None;
+    }
+    let bounds = |b: &Option<FloatOrList>, none: f64| match b {
+        None => vec![none; k],
+        Some(FloatOrList::Float(v)) => vec![v.0; k],
+        Some(list) => list.to_vec(),
+    };
+    let c = rheon_core::Constraint {
+        lo: bounds(coef_min, f64::NEG_INFINITY),
+        hi: bounds(coef_max, f64::INFINITY),
+        sum: coef_sum,
+    };
+    if c.lo.len() != k || c.hi.len() != k {
+        return Some(c);
+    }
+    (!c.is_trivial()).then_some(c)
+}
 
 impl Spec {
+    /// Whether this spec is an `ewridge` with active slope bounds or a fixed
+    /// slope sum (`coef_min`, `coef_max`, `coef_sum`).
+    pub fn ewridge_has_bounds(&self) -> bool {
+        match &self.model {
+            ModelKind::EwRidge {
+                coef_min,
+                coef_max,
+                coef_sum,
+                ..
+            } => slope_constraint(self.k(), coef_min, coef_max, *coef_sum).is_some(),
+            _ => false,
+        }
+    }
+
     /// Whether this spec's model reads the noise gate's statistic
     /// ([`rheon_core::OnlineModel::error_inflation_into`]): the fits
     /// linear in the past targets whose estimation variance is known --
@@ -16,7 +59,8 @@ impl Spec {
     /// reason [`Self::no_noise_statistic`] gives.
     pub fn has_error_inflation(&self) -> bool {
         match self.model {
-            ModelKind::EwRidge { .. } | ModelKind::Rls { .. } | ModelKind::Lasso { .. } => true,
+            ModelKind::EwRidge { .. } => !self.ewridge_has_bounds(),
+            ModelKind::Rls { .. } | ModelKind::Lasso { .. } => true,
             ModelKind::Kalman { .. } => self.kalman_is_gaussian_identity(),
             _ => false,
         }
@@ -29,7 +73,8 @@ impl Spec {
     /// `lasso`, which keeps no factor.
     pub fn has_row_error_inflation(&self) -> bool {
         match self.model {
-            ModelKind::EwRidge { .. } | ModelKind::Rls { .. } => true,
+            ModelKind::EwRidge { .. } => !self.ewridge_has_bounds(),
+            ModelKind::Rls { .. } => true,
             ModelKind::Kalman { .. } => self.kalman_is_gaussian_identity(),
             _ => false,
         }
@@ -39,6 +84,10 @@ impl Spec {
     /// is, for the refusal of `max_error_inflation` (docs/PLAN.md task 116).
     pub(super) fn no_noise_statistic(&self) -> &'static str {
         match self.model {
+            ModelKind::EwRidge { .. } => {
+                "a bounded or fixed-sum ewridge fit is not linear in its targets, so a \
+                 least-squares fit's uncertainty does not hold for it"
+            }
             ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                 "a gradient fit keeps no second moments of the features to read that \
                  uncertainty from"
@@ -88,6 +137,10 @@ impl Spec {
     /// refusals of `emit_influence` and `emit_error_inflation`.
     pub(super) fn no_leverage(&self) -> &'static str {
         match self.model {
+            ModelKind::EwRidge { .. } => {
+                "a bounded or fixed-sum ewridge fit is not linear in its targets, so a \
+                 least-squares leverage does not hold for it"
+            }
             ModelKind::Lasso { .. } => {
                 "it keeps no inverse of its Gram to read one row's leverage from"
             }
@@ -124,14 +177,14 @@ impl Spec {
     /// fits are `ewridge`'s (docs/PLAN.md
     /// task 116, F), and `vector_ar`, whose are statsmodels' `bse`.
     pub fn has_se_coef(&self) -> bool {
-        matches!(
-            self.model,
-            ModelKind::EwRidge { .. }
-                | ModelKind::Rls { .. }
-                | ModelKind::Kalman { .. }
-                | ModelKind::Ar { .. }
-                | ModelKind::VectorAr(_)
-        )
+        match self.model {
+            ModelKind::EwRidge { .. } => !self.ewridge_has_bounds(),
+            ModelKind::Rls { .. }
+            | ModelKind::Kalman { .. }
+            | ModelKind::Ar { .. }
+            | ModelKind::VectorAr(_) => true,
+            _ => false,
+        }
     }
 
     /// Whether this spec's model reports `support_coef`
@@ -142,10 +195,11 @@ impl Spec {
     /// coefficient would read 1 at the default -- nor `ew_cov`, which has no
     /// coefficients.
     pub fn has_support_coef(&self) -> bool {
-        matches!(
-            self.model,
-            ModelKind::EwRidge { .. } | ModelKind::Huber { .. } | ModelKind::Quantile { .. }
-        )
+        match self.model {
+            ModelKind::EwRidge { .. } => !self.ewridge_has_bounds(),
+            ModelKind::Huber { .. } | ModelKind::Quantile { .. } => true,
+            _ => false,
+        }
     }
 
     /// Residual checks whose null a fit fails by construction (DIAG-11):

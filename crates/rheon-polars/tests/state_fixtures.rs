@@ -3297,6 +3297,11 @@ fn kinds() -> Vec<Kind> {
             run: constrained_run,
         },
         Kind {
+            name: "bank_ewridge_bounded",
+            first: ewridge_bounded_first,
+            run: ewridge_bounded_run,
+        },
+        Kind {
             name: "bank_conformal_scores",
             first: conformal_scores_first,
             run: conformal_scores_run,
@@ -3536,6 +3541,58 @@ fn constrained_first() -> (Vec<u8>, DataFrame) {
 
 fn constrained_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&constrained_specs(), bytes, input)
+}
+
+/// The specs of `bank_ewridge_bounded`: slope box bounds and fixed sum on
+/// `ewridge` (unstandardized and standardized, with `coef_every = 0`).
+fn ewridge_bounded_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ew_simplex", "model": {"type": "ewridge", "coef_min": 0.0, "coef_sum": 1.0, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "coef_every": 0.0}"#,
+        r#"{"name": "ew_box_std", "model": {"type": "ewridge", "standardize": true, "coef_min": -0.5, "coef_max": [0.8, 0.6], "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "coef_every": 0.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn ewridge_bounded_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(ewridge_bounded_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn ewridge_bounded_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&ewridge_bounded_specs(), bytes, input)
+}
+
+/// The `bank_ewridge_bounded` fixture freezes `coef_min`, `coef_max`,
+/// `coef_sum`, and the model's `constraint` form non-empty.
+#[test]
+fn the_ewridge_bounded_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_ewridge_bounded")
+        .expect("the bank_ewridge_bounded fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".constraint.sum") && v.as_f64() == Some(1.0)),
+        "constraint.sum is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".constraint.hi.") && v.as_f64() == Some(0.6)),
+        "constraint.hi is not in the file"
+    );
 }
 
 /// The `bank_constrained` fixture freezes `constraints` on both `ewridge` and
@@ -4293,7 +4350,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 36),
+            ("bank", 37),
             ("bars", 4),
             ("checkpoint", 1),
             ("merge", 4),

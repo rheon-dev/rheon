@@ -181,7 +181,7 @@ The fields of `rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=50
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), on an `ill_conditioned` row, and before the model has anything to report |
-| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` | where `coef` is, and in the intercept's place, which is not a share |
+| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` (omitted on bounded or fixed-sum `ewridge`) | where `coef` is, and in the intercept's place, which is not a share |
 
 Under `evidence=True`, it also writes:
 
@@ -253,7 +253,7 @@ The fields of `rp.spec.huber("m", targets=["y"], features=["x0"], half_life=50.0
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
-| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` | where `coef` is, and in the intercept's place, which is not a share |
+| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` (omitted on bounded or fixed-sum `ewridge`) | where `coef` is, and in the intercept's place, which is not a share |
 
 Under `emit_huber_scale=True`, it also writes:
 
@@ -273,7 +273,7 @@ The fields of `rp.spec.quantile("m", targets=["y"], features=["x0"], half_life=5
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
-| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` | where `coef` is, and in the intercept's place, which is not a share |
+| `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` (omitted on bounded or fixed-sum `ewridge`) | where `coef` is, and in the intercept's place, which is not a share |
 
 ## `sgd`
 

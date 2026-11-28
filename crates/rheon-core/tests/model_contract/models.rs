@@ -26,6 +26,7 @@ fn ewridge_cfg() -> EwRidgeCfg {
         max_rows_between_snapshots: None,
         constraints: None,
         evidence: None,
+        constraint: None,
     }
 }
 

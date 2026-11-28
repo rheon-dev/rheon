@@ -151,6 +151,7 @@ fn ewridge_cfg(standardize: bool, ridge: f64) -> EwRidgeCfg {
         max_rows_between_snapshots: None,
         constraints: None,
         evidence: None,
+        constraint: None,
     }
 }
 

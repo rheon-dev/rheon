@@ -769,11 +769,20 @@ fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
         matrix: vec![vec![1.0, 1.0]],
         rhs: vec![1.0],
     };
-    // All four combinations of trailing optional fields on `EwRidgeCfg`:
-    // `(max_rows_between_snapshots, constraints)` must round-trip in BOTH
-    // compact and named msgpack!
+    let bc = rheon_core::Constraint {
+        lo: vec![0.0, 0.0],
+        hi: vec![0.8, 0.8],
+        sum: Some(1.0),
+    };
+    // All valid combinations of trailing optional fields on `EwRidgeCfg`:
+    // `(max_rows_between_snapshots, constraints, constraint)` must round-trip
+    // in BOTH compact and named msgpack!
     for (window, rows) in [(None, None), (Some(50.0), Some(3usize))] {
-        for constraints in [None, Some(lc.clone())] {
+        for (constraints, constraint) in [
+            (None, None),
+            (Some(lc.clone()), None),
+            (None, Some(bc.clone())),
+        ] {
             let cfg = rheon_core::EwRidgeCfg {
                 n_features: 2,
                 n_targets: 1,
@@ -797,9 +806,10 @@ fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
                 max_rows_between_snapshots: rows,
                 constraints: constraints.clone(),
                 evidence: None,
+                constraint: constraint.clone(),
             };
             let mut m = rheon_core::EwRidge::new(cfg).unwrap();
-            m.set_keep_factor(true);
+            m.set_keep_factor(constraint.is_none());
             for i in 0..12 {
                 let x0 = (i as f64 + 1.0) * 0.3;
                 let x1 = ((i * 7 % 11) as f64 - 5.0) * 0.2;
@@ -808,8 +818,9 @@ fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
             }
             m.settle_readiness();
             let what = format!(
-                "ewridge rows={rows:?} constraints={}",
-                constraints.is_some()
+                "ewridge rows={rows:?} constraints={} constraint={}",
+                constraints.is_some(),
+                constraint.is_some()
             );
             let compact = rmp_serde::to_vec(&m).unwrap();
             let named = rmp_serde::to_vec_named(&m).unwrap();
@@ -1066,6 +1077,7 @@ fn regression_variants_round_trip_in_both_encodings() {
                 max_rows_between_snapshots: rows,
                 constraints: None,
                 evidence,
+                constraint: None,
             };
             let mut m = rheon_core::EwRidge::new(cfg).unwrap();
             for i in 0..12 {

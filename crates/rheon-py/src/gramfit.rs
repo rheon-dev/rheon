@@ -719,6 +719,53 @@ pub(crate) fn gram_path_jobs<'py>(
         .collect())
 }
 
+/// Solve bounded / fixed-sum ridge regression on one Gram target across a grid
+/// of penalties, using the exact same primal active-set QP solver as `ewridge`.
+#[pyfunction]
+#[pyo3(signature = (gram, target, slots, icept, ridges, standardize, lo, hi, sum=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gram_qp_solve<'py>(
+    py: Python<'py>,
+    gram: GramIn<'_>,
+    target: usize,
+    slots: Vec<usize>,
+    icept: Option<usize>,
+    ridges: Vec<f64>,
+    standardize: bool,
+    lo: Vec<f64>,
+    hi: Vec<f64>,
+    sum: Option<f64>,
+) -> PyResult<(Bound<'py, PyByteArray>, Vec<bool>)> {
+    let g = read(py, &gram)?;
+    check_axes(
+        std::slice::from_ref(&g),
+        &[vec![target]],
+        &slots,
+        icept,
+        false,
+    )?;
+    if let Some(&r) = ridges.iter().find(|r| !r.is_finite() || **r < 0.0) {
+        return Err(internal(format!(
+            "ridge must be finite and at least 0, got {r}"
+        )));
+    }
+    let con = rheon_polars::rheon_core::Constraint { lo, hi, sum };
+    con.validate(slots.len(), "rheon.gram.solve")
+        .map_err(PyValueError::new_err)?;
+    let res = py.detach(|| {
+        rheon_polars::rheon_core::gramfit::qp_solve(
+            &g.arrays(),
+            target,
+            &slots,
+            icept,
+            &ridges,
+            standardize,
+            &con,
+        )
+    });
+    Ok((float_bytes(py, &res.coefs), res.hit_max_iter))
+}
+
 /// The pooling `within` asks for, with its draws of signs (only within:
 /// the Python layer refuses them beside a union).
 fn pooling(within: bool, signs: Vec<Vec<f64>>) -> Pooling {

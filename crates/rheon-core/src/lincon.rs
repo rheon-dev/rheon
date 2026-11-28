@@ -649,6 +649,7 @@ mod tests {
                 max_rows_between_snapshots: None,
                 constraints: Some(lc.clone()),
                 evidence: None,
+                constraint: None,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -752,6 +753,7 @@ mod tests {
                 max_rows_between_snapshots: None,
                 constraints: Some(lc.clone()),
                 evidence: None,
+                constraint: None,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -803,6 +805,7 @@ mod tests {
                 rhs: vec![1.0],
             }),
             evidence: None,
+            constraint: None,
         })
         .unwrap();
         let mut s = 99u64;

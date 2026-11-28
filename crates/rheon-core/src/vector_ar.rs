@@ -367,6 +367,7 @@ impl VectorArCfg {
             max_rows_between_snapshots: self.max_rows_between_snapshots,
             constraints: None,
             evidence: None,
+            constraint: None,
         }
     }
 }

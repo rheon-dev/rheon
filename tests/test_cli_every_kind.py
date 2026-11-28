@@ -304,6 +304,19 @@ CASES: list[Case] = [
     ),
     Case("ewridge_window", "ewridge", full(**CLOSE, **LS, **WINDOW)),
     Case(
+        "ewridge_bounded",
+        "ewridge",
+        full(
+            **CLOSE,
+            ridge=0.05,
+            standardize=True,
+            coef_min=0.0,
+            coef_max=[0.8, 0.8, 0.8],
+            coef_sum=1.0,
+            solve_every=3.0,
+        ),
+    ),
+    Case(
         "ewridge_temporal",
         "ewridge",
         dict(

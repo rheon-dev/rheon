@@ -166,6 +166,7 @@ fn ewridge(k: usize, t: usize) -> EwRidge {
         max_rows_between_snapshots: None,
         constraints: None,
         evidence: None,
+        constraint: None,
     })
     .unwrap()
 }

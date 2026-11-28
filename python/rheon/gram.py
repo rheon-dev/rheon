@@ -1339,6 +1339,9 @@ def solve(
     features: Sequence[str | int] | None = None,
     standardize: bool = False,
     constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
+    coef_min: float | Sequence[float] | None = None,
+    coef_max: float | Sequence[float] | None = None,
+    coef_sum: float | None = None,
 ) -> Any:
     """Compute ridge coefficients from a Gram, in the features' original units.
 
@@ -1385,8 +1388,21 @@ def solve(
         and ``r`` has length ``q``. Solved in closed form via
         ``beta_c = beta - A R' (R A R')^-1 (R beta - r)``. Default ``None``.
         Refused if ``R`` or ``r`` has wrong shape, non-finite values, a zero
-        row, or linearly dependent rows; returns ``nan`` if ``R A R'`` is
+        row, or linearly dependent rows, or if combined with ``coef_min``,
+        ``coef_max`` or ``coef_sum``; returns ``nan`` if ``R A R'`` is
         singular for a given ridge.
+    ``coef_min``, ``coef_max``, ``coef_sum``
+        Optional slope box bounds and fixed slope sum (never the intercept),
+        in the features' original units (even when ``standardize=True``).
+        ``coef_min`` and ``coef_max`` take a single number broadcast to every
+        active slope column or a sequence of length ``k`` (``-inf`` and
+        ``inf`` leave an edge unbounded); ``coef_sum`` fixes the sum of the
+        active slopes to a finite number. Solved by the same primal active-set
+        quadratic program as bounded :func:`rheon.spec.ewridge`, so a pooled
+        or exported Gram matches ``ewridge`` to the bit. Emits a
+        :class:`~rheon.ReadinessWarning` if any ridge reaches the solver's
+        iteration limit. Refused beside ``constraints``, or when bounds are
+        infeasible or malformed. Default ``None``.
 
     .. rubric:: Returns
 
@@ -1506,13 +1522,47 @@ def solve(
         raise ValueError(msg)
     t = _target_index(g, target, "rheon.gram.solve")
     slots, icept = _feature_slots(g, features, "rheon.gram.solve")
+    has_bounds = coef_min is not None or coef_max is not None or coef_sum is not None
+    if has_bounds and constraints is not None:
+        msg = (
+            "rheon.gram.solve: coef_min, coef_max and coef_sum cannot be used with "
+            "constraints: linear equality constraints and slope bounds solve different "
+            "systems. Leave out constraints, or leave out coef_min, coef_max and coef_sum."
+        )
+        raise ValueError(msg)
+    scalar = np.ndim(ridge) == 0
+    k = len(_columns(g, "rheon.gram.solve"))
+    if has_bounds:
+        lo, hi, sum_val, is_trivial = _parse_bounds(
+            coef_min, coef_max, coef_sum, len(slots), "rheon.gram.solve"
+        )
+        if not is_trivial:
+            raw, hit_max_iter = _native.gram_qp_solve(
+                _native_gram(np, g, icept),
+                t,
+                slots,
+                icept if icept >= 0 else None,
+                [float(r) for r in ridges],
+                bool(standardize),
+                lo,
+                hi,
+                sum_val,
+            )
+            out = np.frombuffer(raw, dtype=np.float64).reshape(len(ridges), k).copy()
+            if any(hit_max_iter):
+                warnings.warn(
+                    ReadinessWarning(
+                        "rheon.gram.solve: bounded quadratic program reached its iteration "
+                        "limit on one or more ridges; returning the best feasible iterate."
+                    ),
+                    stacklevel=_user_stacklevel(),
+                )
+            return out[0] if scalar else out
     parsed_constraints = (
         None
         if constraints is None
         else _parse_constraints(np, constraints, len(slots), "rheon.gram.solve")
     )
-    scalar = np.ndim(ridge) == 0
-    k = len(_columns(g, "rheon.gram.solve"))
 
     means = np.asarray(g["means"], dtype=float)
     cross = np.asarray(g["cross_moments"], dtype=float)[t]
@@ -1565,6 +1615,67 @@ def solve(
             out[good, icept] = ybar - out[good][:, slots] @ m[slots]
             out[~good, icept] = np.nan
     return out[0] if scalar else out
+
+
+def _parse_bounds(
+    coef_min: float | Sequence[float] | None,
+    coef_max: float | Sequence[float] | None,
+    coef_sum: float | None,
+    k_slopes: int,
+    who: str,
+) -> tuple[list[float], list[float], float | None, bool]:
+    """Validate and expand ``coef_min``, ``coef_max``, and ``coef_sum``."""
+
+    def expand(val: Any, default: float, name: str) -> list[float]:
+        if val is None:
+            return [default] * k_slopes
+        if isinstance(val, (bool, str, bytes, Mapping)):
+            msg = (
+                f"{who}: {name} must be a number or a sequence of numbers, "
+                f"but it is {type(val).__name__}. Pass a number or a sequence of numbers."
+            )
+            raise TypeError(msg)
+        if isinstance(val, numbers.Real):
+            return [float(val)] * k_slopes
+        if not isinstance(val, Sequence):
+            try:
+                val = list(val)
+            except TypeError as exc:
+                msg = (
+                    f"{who}: {name} must be a number or a sequence of numbers, "
+                    f"but it is {type(val).__name__}. Pass a number or a sequence of numbers."
+                )
+                raise TypeError(msg) from exc
+        out: list[float] = []
+        for x in val:
+            if isinstance(x, bool) or not isinstance(x, numbers.Real):
+                msg = (
+                    f"{who}: {name} entries must be numbers, but found {type(x).__name__}. "
+                    f"Pass finite numbers or infinities in {name}."
+                )
+                raise TypeError(msg)
+            out.append(float(x))
+        return out
+
+    lo = expand(coef_min, -math.inf, "coef_min")
+    hi = expand(coef_max, math.inf, "coef_max")
+    sum_val: float | None = None
+    if coef_sum is not None:
+        if isinstance(coef_sum, bool) or not isinstance(coef_sum, numbers.Real):
+            msg = (
+                f"{who}: coef_sum must be a finite number, "
+                f"but it is {type(coef_sum).__name__}. Pass a finite number or None."
+            )
+            raise TypeError(msg)
+        sum_val = float(coef_sum)
+    is_trivial = (
+        len(lo) == k_slopes
+        and len(hi) == k_slopes
+        and sum_val is None
+        and all(math.isinf(x) and x < 0.0 for x in lo)
+        and all(math.isinf(x) and x > 0.0 for x in hi)
+    )
+    return lo, hi, sum_val, is_trivial
 
 
 def _parse_constraints(

@@ -219,7 +219,7 @@ _INF_OK: dict[str, frozenset[str]] = {
             "feature_health_half_life",
         }
     ),
-    "ewridge": frozenset({"long_half_life"}),
+    "ewridge": frozenset({"long_half_life", "coef_min", "coef_max"}),
     "lasso": frozenset({"select_half_life"}),
     "kalman": frozenset({"coef_half_life", "revert_half_life"}),
     # A refit budget at `inf` is no bound (task 277).
@@ -292,7 +292,17 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
-    "ewridge": frozenset({"gram_threads", "constraints", "evidence", "evidence_prior"}),
+    "ewridge": frozenset(
+        {
+            "gram_threads",
+            "constraints",
+            "evidence",
+            "evidence_prior",
+            "coef_min",
+            "coef_max",
+            "coef_sum",
+        }
+    ),
     "rls": frozenset({"constraints"}),
     "lasso": frozenset({"positive"}),
     "pa": frozenset({"average"}),

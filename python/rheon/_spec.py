@@ -1401,6 +1401,9 @@ def ewridge(
     constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
     evidence: bool = False,
     evidence_prior: float | list[float] | None = None,
+    coef_min: float | list[float] | None = None,
+    coef_max: float | list[float] | None = None,
+    coef_sum: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted ridge regression on running sums.
@@ -1628,17 +1631,18 @@ def ewridge(
         intercept, when ``fit_intercept=True``, is never constrained. ``R``
         must have finite entries and full row rank. Standard errors,
         ``error_inflation`` and ``support_coef`` use the constrained
-        covariance and ``edf - q``. Refused beside ``feature_sets`` or
-        ``evidence = True``.
-        Serialized as ``{"matrix": R, "rhs": r}`` in JSON and TOML specs.
+        covariance and ``edf - q``. Refused beside ``feature_sets``,
+        ``evidence = True``, or any of ``coef_min``, ``coef_max`` and
+        ``coef_sum``. Serialized as ``{"matrix": R, "rhs": r}`` in JSON and
+        TOML specs.
     ``evidence``
         Choose the ridge and noise precision automatically at solve time by
         MacKay empirical-Bayes evidence maximization (matching
         scikit-learn's ``BayesianRidge``). Default ``False``. When ``True``,
         emits ``pred_std_<t>`` (per target and feature set), the predictive
         standard deviation ``sqrt(1 / alpha + z' Sigma z)``, and refuses
-        explicit ``ridge``, ``ridge_scale = "sum"``, ``coef_prior`` and
-        ``constraints``.
+        explicit ``ridge``, ``ridge_scale = "sum"``, ``coef_prior``,
+        ``constraints`` and ``coef_min`` / ``coef_max`` / ``coef_sum``.
     ``evidence_prior``
         Gamma hyperprior parameters for ``evidence = True``: either a single
         non-negative finite value applied to all four parameters
@@ -1647,6 +1651,23 @@ def ewridge(
         Default ``1e-6`` (matching scikit-learn's ``BayesianRidge``); ``0.0``
         gives pure maximum marginal likelihood. Refused when
         ``evidence = False``.
+    ``coef_min``, ``coef_max``, ``coef_sum``
+        Box bounds and an optional fixed sum on the slopes, all in the
+        features' original units (even when ``standardize=True``). The
+        intercept, when ``fit_intercept=True``, is never constrained.
+        ``coef_min`` and ``coef_max`` take a single number broadcast to every
+        feature or one value per feature in ``features`` order; ``-inf`` and
+        ``inf`` leave an edge unbounded. ``coef_sum`` fixes the sum of the
+        slopes to a finite value (for example ``coef_min=0.0, coef_sum=1.0``
+        for convex combinations). Solved on ``ewridge``'s solve cadence by a
+        warm-started active-set quadratic program; any solve that reaches its
+        iteration limit is counted in ``solve_failures``. When active, the
+        default readiness gate switches to ``min_weight`` (one row per
+        unknown), ``support_coef`` is omitted from outputs, and
+        ``emit_se_coef``, ``emit_robust_se``, ``emit_error_inflation``,
+        ``emit_influence``, finite ``max_error_inflation``, ``feature_sets``,
+        ``constraints`` and ``evidence = True`` are refused. Default: no
+        bounds or fixed sum.
 
     .. rubric:: Output
 
@@ -1721,11 +1742,18 @@ def ewridge(
       ``window_budget`` without ``window_size``;
     - a ``constraints`` pair ``(R, r)`` whose ``R`` is empty, not full row
       rank, has more rows than features, has the wrong width, has non-finite
-      values, or is given beside ``feature_sets`` or ``evidence = True``;
+      values, or is given beside ``feature_sets``, ``evidence = True`` or
+      ``coef_min`` / ``coef_max`` / ``coef_sum``;
     - ``evidence = True`` beside ``ridge``, ``ridge_scale = "sum"``,
-      ``coef_prior`` or ``constraints``; ``evidence_prior`` when
-      ``evidence = False``, or with a length other than 1 or 4, or with any
-      negative or non-finite value.
+      ``coef_prior``, ``constraints`` or ``coef_min`` / ``coef_max`` /
+      ``coef_sum``; ``evidence_prior`` when ``evidence = False``, or with a
+      length other than 1 or 4, or with any negative or non-finite value;
+    - ``coef_min``, ``coef_max`` or ``coef_sum`` with wrong length,
+      ``coef_min > coef_max``, an infeasible ``coef_sum`` outside
+      ``[sum(coef_min), sum(coef_max)]``, or combined with ``constraints``,
+      ``evidence = True``, ``feature_sets``, ``emit_se_coef``,
+      ``emit_robust_se``, ``emit_error_inflation``, ``emit_influence`` or a
+      finite ``max_error_inflation``.
 
     .. rubric:: The update
 
@@ -2094,6 +2122,12 @@ def ewridge(
     model = {k: v for k, v in model.items() if v is not None or k not in skipped}
     if constraints is not None:
         model["constraints"] = _constraints_table(constraints)
+    if coef_min is not None:
+        model["coef_min"] = coef_min
+    if coef_max is not None:
+        model["coef_max"] = coef_max
+    if coef_sum is not None:
+        model["coef_sum"] = coef_sum
     if ridge_scale not in ("mean", "sum"):
         raise ValueError(
             words_refusal(f"spec {quoted(name)}", "ridge_scale", ridge_scale, ("mean", "sum"))

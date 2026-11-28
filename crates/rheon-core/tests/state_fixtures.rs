@@ -4896,3 +4896,41 @@ fn kalman_extras_fixtures_write_prior_and_innovation_flags() {
         );
     }
 }
+
+/// The `ewridge_bounded` fixture writes its `constraint` form non-empty
+/// (`lo`, `hi`, `sum`), while unconstrained and linear-equality `ewridge`
+/// fixtures omit `cfg.constraint`.
+#[test]
+fn ewridge_bounded_fixture_writes_its_constraint_form() {
+    if regenerating() {
+        return;
+    }
+    let decoded =
+        |f: &crate::cases::Fixture| rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "ewridge_bounded")
+        .expect("ewridge_bounded fixture");
+    let v = decoded(f);
+    let con = at(&v, &["model", "EwRidge", "cfg", "constraint"])
+        .expect("ewridge_bounded: cfg.constraint missing");
+    assert_eq!(
+        at(con, &["sum"]).and_then(rmpv::Value::as_f64),
+        Some(1.0),
+        "ewridge_bounded: constraint.sum"
+    );
+    assert!(
+        at(con, &["lo"])
+            .and_then(rmpv::Value::as_array)
+            .is_some_and(|a| !a.is_empty()),
+        "ewridge_bounded: constraint.lo"
+    );
+    for name in ["ewridge", "ewridge_constrained"] {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = decoded(f);
+        assert!(
+            at(&v, &["model", "EwRidge", "cfg", "constraint"]).is_none(),
+            "{name}: must not write cfg.constraint"
+        );
+    }
+}

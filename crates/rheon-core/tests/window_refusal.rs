@@ -100,6 +100,7 @@ fn models() -> Vec<Make> {
                         max_rows_between_snapshots: None,
                         constraints: None,
                         evidence: None,
+                        constraint: None,
                     })
                     .unwrap(),
                 ) as Box<dyn Probe>

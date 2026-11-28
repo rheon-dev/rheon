@@ -125,7 +125,8 @@ MEANING: dict[str, str] = {
     ),
     "support_coef": (
         "on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` "
-        "the system the solve inverts, laid out like `coef`"
+        "the system the solve inverts, laid out like `coef` (omitted on bounded or fixed-sum "
+        "`ewridge`)"
     ),
     "penalty_selected_<t>": (
         "the penalty of the grid point in force for `<t>` before this row, the one with the "

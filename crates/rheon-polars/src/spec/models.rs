@@ -2201,6 +2201,9 @@ impl Spec {
                 constraints,
                 evidence,
                 evidence_prior,
+                coef_min,
+                coef_max,
+                coef_sum,
                 ..
             } => {
                 if *evidence {
@@ -2208,6 +2211,14 @@ impl Spec {
                         no.refuse(format!(
                             "spec {:?}: evidence=True cannot be combined with linear constraints. \
                              Leave constraints out, or set evidence=False.",
+                            self.name
+                        ));
+                    }
+                    if coef_min.is_some() || coef_max.is_some() || coef_sum.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: evidence=True cannot be combined with coef_min, coef_max \
+                             or coef_sum. Leave out coef_min, coef_max and coef_sum, or set \
+                             evidence=False.",
                             self.name
                         ));
                     }
@@ -2392,6 +2403,34 @@ impl Spec {
                             )
                         }));
                     }
+                }
+                if let Some(bcon) = super::slope_constraint(self.k(), coef_min, coef_max, *coef_sum)
+                {
+                    if constraints.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: coef_min, coef_max and coef_sum cannot be used with \
+                             constraints: linear equality constraints and slope bounds solve \
+                             different systems. Leave out constraints, or leave out coef_min, \
+                             coef_max and coef_sum.",
+                            self.name
+                        ));
+                    }
+                    if feature_sets.as_ref().is_some_and(|s| !s.is_empty()) {
+                        no.refuse(format!(
+                            "spec {:?}: coef_min, coef_max and coef_sum cannot be used with \
+                             feature_sets: each feature set drops a different subset of columns, \
+                             so one slope bound or sum cannot apply to every set. Leave out \
+                             feature_sets, or leave out coef_min, coef_max and coef_sum.",
+                            self.name
+                        ));
+                    }
+                    no.take(bcon.validate(self.k(), "ewridge").map_err(|e| {
+                        format!(
+                            "spec {:?}: {}",
+                            self.name,
+                            e.trim_start_matches("ewridge: ")
+                        )
+                    }));
                 }
             }
             ModelKind::Bandit(b) => {
