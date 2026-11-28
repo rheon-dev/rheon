@@ -447,3 +447,40 @@ class GbdtSampler:
     def ref_matrix(self, max_bin: int) -> tuple[bytes, int, int]: ...
 
 def gbdt_available_memory() -> int: ...
+
+class ClassMetrics:
+    """Streaming binary classification metrics accumulator (t-digests + reliability bins)."""
+
+    def __init__(
+        self,
+        n_bins: int = 10,
+        compression: float = 200.0,
+        max_state_bytes: int | None = None,
+        bins_only: bool = False,
+    ) -> None: ...
+    def update_batch(
+        self,
+        preds: pl.Series,
+        ys: pl.Series,
+        weights: pl.Series | None = None,
+    ) -> None: ...
+    @property
+    def n(self) -> int: ...
+    def merge(self, other: ClassMetrics) -> None: ...
+    def summary(
+        self,
+    ) -> tuple[
+        int,
+        int,
+        int,
+        float,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+    ]: ...
+    def bins(
+        self,
+    ) -> list[tuple[int, float, float, int, float, float | None, float | None, float | None]]: ...

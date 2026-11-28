@@ -633,6 +633,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/bocpd/span.rs"]
 
+[messages."crates/rheon-core/src/class_metrics.rs"]
+
 [messages."crates/rheon-core/src/clock_span.rs"]
 
 [messages."crates/rheon-core/src/conformal_variants.rs"]
@@ -803,6 +805,9 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/windows_frame/defs.rs"]
 
+[messages."crates/rheon-py/src/class_metrics.rs"]
+"where" = 7
+
 [messages."python/rheon/_cpu_check.py"]
 "remedy" = 2
 "where" = 2
@@ -828,6 +833,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/polars/_basis.py"]
 
 [messages."python/rheon/polars/_clock.py"]
+
+[messages."python/rheon/polars/_eval_classification.py"]
 
 [messages."python/rheon/polars/_eval_compare.py"]
 
@@ -894,6 +901,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/bocpd/extras.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/class_metrics.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
 
@@ -1051,6 +1060,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/windows_frame/defs.rs#messages"]
 
+[vocabulary."crates/rheon-py/src/class_metrics.rs#messages"]
+
 [vocabulary."docs/how-to/merge-streams-by-the-clock.md"]
 
 [vocabulary."python/rheon/_cpu_check.py#messages"]
@@ -1123,6 +1134,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 
 [vocabulary."python/rheon/polars/_errors.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_eval_classification.py#messages"]
 
 [vocabulary."python/rheon/polars/_eval_compare.py#docstrings"]
 

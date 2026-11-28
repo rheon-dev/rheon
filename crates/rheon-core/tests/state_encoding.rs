@@ -928,6 +928,53 @@ fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
             roundtrip(&s, &format!("sandwich types={types:?} active={active:?}"));
         }
     }
+
+    // `Calibration` and `Coverage`: plain, discrete HAC, and clock-duration HAC
+    // (numeric and temporal clocks) must all round-trip through both compact
+    // and named msgpack.
+    let mut cal_plain = rheon_core::Calibration::new();
+    let mut cal_lags = rheon_core::Calibration::with_lags(3);
+    let mut cal_clock_raw =
+        rheon_core::Calibration::with_clock_bandwidth(6.0, None, rheon_core::DEFAULT_STATE_BYTES);
+    let mut cal_clock_ns = rheon_core::Calibration::with_clock_bandwidth(
+        6.0,
+        Some(6_000_000_000),
+        rheon_core::DEFAULT_STATE_BYTES,
+    );
+    let mut cov_plain = rheon_core::Coverage::new(0.8, 0);
+    let mut cov_lags = rheon_core::Coverage::new(0.8, 3);
+    let mut cov_clock_raw =
+        rheon_core::Coverage::with_clock_bandwidth(0.8, 6.0, None, rheon_core::DEFAULT_STATE_BYTES);
+    let mut cov_clock_ns = rheon_core::Coverage::with_clock_bandwidth(
+        0.8,
+        6.0,
+        Some(6_000_000_000),
+        rheon_core::DEFAULT_STATE_BYTES,
+    );
+    for i in 0..20 {
+        let p = 0.2 * i as f64;
+        let y = p + if i % 3 == 0 { 0.3 } else { -0.2 };
+        let s_raw = Some(rheon_core::Stamp::Raw(i as f64 * 0.7, 0.0));
+        let s_ns = Some(rheon_core::Stamp::Ns(
+            1_700_000_000_000_000_000i128 + i as i128 * 700_000_000,
+        ));
+        cal_plain.update(p, y, 0.96, 1.0);
+        cal_lags.update(p, y, 0.96, 1.0);
+        cal_clock_raw.update_at(p, y, 0.96, 1.0, 0.7, s_raw);
+        cal_clock_ns.update_at(p, y, 0.96, 1.0, 0.7, s_ns);
+        cov_plain.update(p, y, 0.96, 1.0);
+        cov_lags.update(p, y, 0.96, 1.0);
+        cov_clock_raw.update_at(p, y, 0.96, 1.0, 0.7, s_raw);
+        cov_clock_ns.update_at(p, y, 0.96, 1.0, 0.7, s_ns);
+    }
+    roundtrip(&cal_plain, "calibration plain");
+    roundtrip(&cal_lags, "calibration lags");
+    roundtrip(&cal_clock_raw, "calibration clock_hac raw");
+    roundtrip(&cal_clock_ns, "calibration clock_hac ns");
+    roundtrip(&cov_plain, "coverage plain");
+    roundtrip(&cov_lags, "coverage lags");
+    roundtrip(&cov_clock_raw, "coverage clock_hac raw");
+    roundtrip(&cov_clock_ns, "coverage clock_hac ns");
 }
 
 /// Regression variants (evidence on `ewridge`, `positive` on `lasso`,

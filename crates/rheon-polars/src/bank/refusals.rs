@@ -26,9 +26,17 @@ pub(super) fn over_budget(
 /// group and the bytes, and the ways out. Found as the rows go in, so the
 /// bank that raises it has learned part of the chunk, learning no event
 /// after the one before the cap, and marks itself `broken`.
-pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
+pub(super) fn over_state_cap(
+    spec: &Spec,
+    key: &GroupKey,
+    bytes: u64,
+    cap: u64,
+    owner: crate::stream::StateCapOwner,
+) -> PolarsError {
     let group = super::group_label(spec, key);
-    let fixed = crate::stream::fixed_span(spec);
+    let fixed = (owner == crate::stream::StateCapOwner::Model)
+        .then(|| crate::stream::fixed_span(spec))
+        .flatten();
     let given = if let Some(f) = fixed.as_ref() {
         format!("{cap} bytes, {}", f.cap)
     } else if spec.max_state_bytes.is_some() || spec.model.model_max_state_bytes().is_some() {
@@ -36,9 +44,20 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
     } else {
         format!("the default max_state_bytes of {cap}, which a spec gets when it sets none")
     };
-    let (window, shorten) = if let Some(f) = fixed {
+    let (window, shorten) = if owner == crate::stream::StateCapOwner::CalibrationClock {
+        let emb = spec
+            .embargo
+            .as_ref()
+            .map_or_else(|| "embargo".to_string(), |e| format!("embargo = {e}"));
+        (
+            format!("the calibration residuals inside 2 * embargo ({emb})"),
+            "Give horizon_rows, or shorten embargo",
+        )
+    } else if let Some(f) = fixed {
         (format!("the {} inside {}", f.holds, f.span), f.shorten)
-    } else if let Some(w) = &spec.conformal_p_window_size {
+    } else if owner == crate::stream::StateCapOwner::ConformalP
+        && let Some(w) = &spec.conformal_p_window_size
+    {
         (
             format!("the rows inside conformal_p_window_size = {w}"),
             "Shorten conformal_p_window_size, or give conformal_p_window_rows",

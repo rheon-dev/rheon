@@ -3304,6 +3304,11 @@ fn kinds() -> Vec<Kind> {
             first: regression_variants_first,
             run: regression_variants_run,
         },
+        Kind {
+            name: "bank_calibration_clock_embargo",
+            first: extra::calibration_clock_embargo_first,
+            run: extra::calibration_clock_embargo_run,
+        },
     ]
 }
 
@@ -4261,7 +4266,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 34),
+            ("bank", 35),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

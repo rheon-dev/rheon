@@ -379,7 +379,13 @@ size.
 variance.** Targets that overlap correlate the residuals, as [Can its t be
 trusted?](#can-its-t-be-trusted) explains. Under a horizon of `h` rows the
 test of `a = 0, b = 1` is Wald's with the regression's sandwich at `2h`
-lags, built from the residual under the null, `y − pred`. On the two-stage
+lags, built from the residual under the null, `y − pred`. On a spec with a
+clock column, an `embargo`, and no explicit `horizon_rows`, `emit_calibration`
+infers a clock-duration Newey and West Bartlett kernel over bandwidth
+`B = 2 * embargo`. Each prior residual within `0 <= dt < B` takes weight
+`1 - dt / B`, bounded per group by `max_state_bytes` (default 256 KB, ceiling
+64 MiB; warns once past half and refuses atomically at the cap). Passing
+`horizon_rows` selects the discrete row-lag sandwich instead. On the two-stage
 example's look-ahead target, a slope of 0.99 came with a `wald` of 1.1
 under `horizon_rows=150`, consistent with `a = 0, b = 1` ([Check each
 stage with the diagnostics it asks
@@ -781,9 +787,12 @@ since a row is a unit there. On a clock column `embargo` is in clock units,
 and the rows it spans are not known before the stream, so the spec gives
 `horizon_rows`, the rows the target looks ahead. It is a count of rows,
 named as `warm_rows` and `window_rows` are, because the residuals overlap by
-rows whatever the clock. A spec with a clock column, an `embargo` and no
-`horizon_rows` has a horizon of 0, and each diagnostic that reads one says
-so once, in a `ReadinessWarning`. Under a horizon of `h` rows:
+rows whatever the clock. On a clocked `embargo` with no `horizon_rows`, `emit_calibration` infers a
+clock-duration Bartlett kernel over bandwidth `2 * embargo` bounded by
+`max_state_bytes` (for both mean calibration and quantile coverage) and issues
+no warning. Every other diagnostic that reads a horizon (`emit_breaks`,
+`emit_specification`, and `emit_robust_se`) falls back to a horizon of 0 and
+says so once in a `ReadinessWarning`. Under a horizon of `h` rows:
 
 | diagnostic | under a horizon |
 |---|---|
@@ -1084,7 +1093,7 @@ after the run.
 | running accuracy | `emit_metrics`, `metric_quantiles` | `emit_metrics=True` writes `ic_<t>`, `r2_<t>` and `hit_rate_<t>`; a list of names picks any subset of `ic`, `r2`, `hit_rate`, `mae`, `pinball`, `log_loss`, `coverage`, `width` and `winkler` | |
 | a choice as the stream runs | `emit_selected`, `emit_averaged` | the grid point with the lowest EW error so far, and every slot's prediction weighted by its error | [Choose among a grid's settings as the stream runs](how-to/choose-among-a-grid-online.md) |
 | a test of two models | `rp.eval.diebold_mariano`, `rp.eval.clark_west`, `rp.eval.giacomini_white`, `rp.eval.seqtest`, `rp.eval.mean_seqtest`, the `seqtest` model | unconditional or conditional accuracy tests, or anytime-valid evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
-| metrics after the run | `rp.eval.metrics`, `window_metrics`, `interval_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate, MSE, opt-in MAE, pinball and D² pinball; interval coverage, mean width, Winkler score and size-stratified coverage (SSC) | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
+| metrics after the run | `rp.eval.metrics`, `window_metrics`, `interval_metrics`, `classification_metrics`, `reliability_bins`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate, MSE, opt-in MAE, pinball and D² pinball; interval coverage, mean width, Winkler score and size-stratified coverage (SSC); binary ROC-AUC, PR-AUC (Average Precision), exact ECE, MCE, Brier and reliability bins | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
 
 **`hit_rate` asks whether prediction and target fall on the same side of
 zero.** A row where either is exactly zero is on neither side, and both
@@ -1227,16 +1236,23 @@ runs.
 
 `rp.eval`'s calls score a finished run's output frame: `metrics` per spec
 and group, `window_metrics` per window of the clock, `interval_metrics` for
-conformal intervals, `compare_specs` over several specs, and `unpack` to long
-form. Passing `mae=True` or `quantiles=[...]` to `metrics` or `window_metrics`
-adds `mae`, `pinball_q<τ>` and `d2_pinball_q<τ>` alongside the default columns.
-`rp.eval.interval_metrics` computes `n`, `coverage`, `mean_width`, `winkler`
-(Winkler 1972) and `ssc` (size-stratified coverage over `ssc_bins` equal-count
-width bins, Angelopoulos and Bates 2021) for single- or multi-level conformal
-outputs, with `group`, `weight` and `window_rows`. For an output too large to
-hold, each takes a query of it in place of the frame, as the tests of two
-specs do, and reads it a chunk at a time, reducing each chunk to ten numbers
-per slot and group.
+conformal intervals, `classification_metrics` and `reliability_bins` for binary
+probability predictions, `compare_specs` over several specs, and `unpack` to
+long form. Passing `mae=True` or `quantiles=[...]` to `metrics` or
+`window_metrics` adds `mae`, `pinball_q<τ>` and `d2_pinball_q<τ>` alongside the
+default columns. `rp.eval.interval_metrics` computes `n`, `coverage`,
+`mean_width`, `winkler` (Winkler 1972) and `ssc` (size-stratified coverage over
+`ssc_bins` equal-count width bins, Angelopoulos and Bates 2021) for single- or
+multi-level conformal outputs, with `group`, `weight` and `window_rows`.
+`rp.eval.classification_metrics` streams binary scores through two per-class
+merging t-digests and exact uniform `[0, 1]` reliability bins to report
+`roc_auc`, `pr_auc` (Average Precision), exact `ece`, `mce` and `brier` in
+bounded memory per key. It accepts either a bank spec or plain `pred` and
+`target` columns on a `DataFrame` or `LazyFrame` with bit-for-bit chunk
+invariance. `rp.eval.reliability_bins` returns the underlying per-bin table
+without building t-digests. For an output too large to hold, each takes a query
+of it in place of the frame, as the tests of two specs do, and reads it a chunk
+at a time, reducing each chunk to bounded state per slot and group.
 The sums are centered, so a target far from zero keeps its variance.
 `merge_sums` adds the sums of several runs, the same to rounding whatever
 the split, and `from_sums` turns the total into the metrics. [Evaluate an output

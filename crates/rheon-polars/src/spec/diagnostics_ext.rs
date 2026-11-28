@@ -41,6 +41,7 @@ impl Spec {
         }
         self.check_robust_se(no, predicts);
         self.check_max_state_bytes(no);
+        self.check_calibration_clock_hac(no);
         if predicts {
             self.check_residual_assumptions(no);
             if matches!(self.model, ModelKind::Glm { .. }) && self.emit_white {

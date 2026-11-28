@@ -43,19 +43,51 @@
 //! residual under the null, `y − pred` (`a = 0, b = 1` leave nothing else),
 //! so it needs no fit of its own.
 
+mod clock_hac;
+
+pub use clock_hac::{
+    CLOCK_COVERAGE_HAC_ENTRY_BYTES, CLOCK_COVERAGE_HAC_FIXED_BYTES, CLOCK_HAC_ENTRY_BYTES,
+    CLOCK_HAC_FIXED_BYTES, ClockCoverageHac, ClockHac,
+};
+
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+use crate::Stamp;
+
 /// Mincer–Zarnowitz calibration of one prediction slot. See the module docs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Calibration {
     /// The EW moments of `(pred, y)`, never windowed: no runs.
     joint: crate::EwCov,
     /// Under a horizon, the sandwich of the regression on `(1, pred)` at
     /// Newey and West's lags, its meat from `y − pred` (module docs).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     hac: Option<crate::Sandwich>,
+    /// Under a clocked `embargo` with no explicit `horizon_rows`, the
+    /// clock-duration Bartlett HAC accumulator over `2 * embargo`.
+    /// Skipped when absent so existing states keep identical bytes.
+    #[serde(default)]
+    clock_hac: Option<ClockHac>,
+}
+
+impl Serialize for Calibration {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let has_clock = self.clock_hac.is_some();
+        let emit_hac = self.hac.is_some() || has_clock;
+        let len = 1 + usize::from(emit_hac) + usize::from(has_clock);
+        let mut s = serializer.serialize_struct("Calibration", len)?;
+        s.serialize_field("joint", &self.joint)?;
+        if emit_hac {
+            s.serialize_field("hac", &self.hac)?;
+        }
+        if has_clock {
+            s.serialize_field("clock_hac", &self.clock_hac)?;
+        }
+        s.end()
+    }
 }
 
 impl Default for Calibration {
@@ -75,14 +107,31 @@ impl Calibration {
         Self {
             joint: crate::EwCov::new(2).without_runs(),
             hac: (lags > 0).then(|| crate::Sandwich::new(1, true, lags)),
+            clock_hac: None,
+        }
+    }
+
+    /// A calibration whose Wald statistic reads a clock-duration Newey-West
+    /// Bartlett kernel over bandwidth `bandwidth = 2 * embargo` (with optional
+    /// exact nanosecond bandwidth `bandwidth_ns`), bounded by `cap_bytes`.
+    pub fn with_clock_bandwidth(
+        bandwidth: f64,
+        bandwidth_ns: Option<i128>,
+        cap_bytes: u64,
+    ) -> Self {
+        Self {
+            joint: crate::EwCov::new(2).without_runs(),
+            hac: None,
+            clock_hac: Some(ClockHac::new(bandwidth, bandwidth_ns, cap_bytes)),
         }
     }
 
     /// Whether a restored accumulator is shaped as a fresh one at `lags`:
     /// its moments two wide, with the sum of squared weights Kish's size
-    /// reads, and the sandwich at those lags.
+    /// reads, and the sandwich at those lags (with no clock-duration HAC).
     pub fn has_shape(&self, lags: usize) -> bool {
-        self.joint.has_shape(2)
+        self.clock_hac.is_none()
+            && self.joint.has_shape(2)
             && self.joint.q_sum().is_some()
             && match &self.hac {
                 None => lags == 0,
@@ -90,11 +139,44 @@ impl Calibration {
             }
     }
 
+    /// Whether a restored accumulator is shaped for clock-duration Bartlett HAC
+    /// at `(bandwidth, bandwidth_ns, cap_bytes)`.
+    pub fn has_shape_clock(
+        &self,
+        bandwidth: f64,
+        bandwidth_ns: Option<i128>,
+        cap_bytes: u64,
+    ) -> bool {
+        self.hac.is_none()
+            && self.joint.has_shape(2)
+            && self.joint.q_sum().is_some()
+            && self
+                .clock_hac
+                .as_ref()
+                .is_some_and(|ch| ch.has_shape(bandwidth, bandwidth_ns, cap_bytes))
+    }
+
+    /// If clock-duration HAC refused a row past its byte cap, returns
+    /// `(attempted_bytes, cap_bytes)`.
+    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.clock_hac.as_ref().and_then(ClockHac::state_over_cap)
+    }
+
+    /// Drain any once-per-slot half-cap warning raised by clock-duration HAC.
+    pub fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.clock_hac
+            .as_mut()
+            .and_then(ClockHac::take_state_warning)
+    }
+
     /// The rows behind this one are no longer adjacent to it -- a capped gap
     /// or a session change -- so none is a lag of the next.
     pub fn clear_lags(&mut self) {
         if let Some(h) = self.hac.as_mut() {
             h.clear_lags();
+        }
+        if let Some(ch) = self.clock_hac.as_mut() {
+            ch.clear_lags();
         }
     }
 
@@ -116,6 +198,9 @@ impl Calibration {
         if let Some(h) = self.hac.as_mut() {
             h.age(lam);
         }
+        if let Some(ch) = self.clock_hac.as_mut() {
+            ch.age(lam);
+        }
     }
 
     /// One scored row: its prediction, its outcome, the step's decay and its
@@ -123,12 +208,53 @@ impl Calibration {
     /// the moments (CLAUDE.md hard rule 9): it is not evidence about the
     /// calibration, and a zero-weight first row would be `0/0`.
     pub fn update(&mut self, pred: f64, y: f64, lam: f64, w: f64) {
+        if self.clock_hac.is_some() {
+            self.update_at(pred, y, lam, w, 1.0, None);
+            return;
+        }
         if !(pred.is_finite() && y.is_finite() && w > 0.0) {
             return self.age(lam);
         }
         self.joint.update(&[pred, y], lam, w);
         if let Some(h) = self.hac.as_mut() {
             h.update(&[pred], y - pred, lam, w);
+        }
+    }
+
+    /// One scored row with clock step `d_clock` and optional exact [`Stamp`].
+    ///
+    /// When clock-duration HAC is inactive, delegates directly to
+    /// [`Self::update`] (bit-identical to the legacy path). Under clock-duration
+    /// HAC, zero-weight rows neither enter the ring nor advance clock stamps
+    /// (hard rule 9), and the `HeldCap` check runs atomically before mutating
+    /// either `clock_hac` or `joint`.
+    pub fn update_at(
+        &mut self,
+        pred: f64,
+        y: f64,
+        lam: f64,
+        w: f64,
+        d_clock: f64,
+        stamp: Option<Stamp>,
+    ) {
+        let Some(ch) = self.clock_hac.as_mut() else {
+            self.update(pred, y, lam, w);
+            return;
+        };
+        if !(w > 0.0 && w.is_finite()) {
+            if lam != 1.0 {
+                self.joint.decay(lam);
+                ch.age(lam);
+            }
+            return;
+        }
+        if !(pred.is_finite() && y.is_finite()) {
+            self.joint.decay(lam);
+            ch.age_and_step(lam, d_clock, stamp);
+            return;
+        }
+        if ch.try_update(pred, y, lam, w, d_clock, stamp) {
+            self.joint.update(&[pred, y], lam, w);
         }
     }
 
@@ -159,6 +285,10 @@ impl Calibration {
             let a = self.joint.mean(1) - b * self.joint.mean(0);
             return h.wald(&[0], true, &[0, 1], &[a, b - 1.0]);
         }
+        if let Some(ch) = &self.clock_hac {
+            let a = self.joint.mean(1) - b * self.joint.mean(0);
+            return ch.wald(a, b - 1.0);
+        }
         let (c_pp, c_py, c_yy) = (self.joint.var(0), self.joint.cov(0, 1), self.joint.var(1));
         let s2 = c_yy - c_py * c_py / c_pp;
         // A NaN spread is no spread either.
@@ -188,7 +318,7 @@ impl Calibration {
 /// `n_kish (coverage − q)²`. Under a horizon the indicators overlap as the
 /// residuals do, and the variance takes Newey and West's Bartlett-weighted
 /// lag products of `ω d` over `L` lags, as [`crate::Breaks`]' does.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Coverage {
     /// The quantile level, in `(0, 1)`.
     q: f64,
@@ -200,17 +330,56 @@ pub struct Coverage {
     /// newest first; 0 and empty without a horizon.
     #[serde(default)]
     lags: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     p: Vec<f64>,
-    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    #[serde(default)]
     ring: VecDeque<f64>,
     /// Under a horizon, the indicators' empirical lag 0, `Σ (ω d)²`: the
     /// variance's fallback where the null's lag 0 leaves it at or below 0
     /// ([`Self::wald`]). `None` without a horizon, and in a state saved
     /// before it, which starts it at the null's `q (1 − q) Σ ω²` at its next
     /// row (rule 5's thirty-first exception).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     g: Option<f64>,
+    /// Under a clocked `embargo` with no explicit `horizon_rows`, the
+    /// clock-duration Bartlett HAC accumulator over `2 * embargo`.
+    /// Skipped when absent so existing states keep identical bytes.
+    #[serde(default)]
+    clock_hac: Option<ClockCoverageHac>,
+}
+
+impl Serialize for Coverage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let has_clock = self.clock_hac.is_some();
+        let emit_p = !self.p.is_empty() || has_clock;
+        let emit_ring = !self.ring.is_empty() || has_clock;
+        let emit_g = self.g.is_some() || has_clock;
+        let len = 5
+            + usize::from(emit_p)
+            + usize::from(emit_ring)
+            + usize::from(emit_g)
+            + usize::from(has_clock);
+        let mut s = serializer.serialize_struct("Coverage", len)?;
+        s.serialize_field("q", &self.q)?;
+        s.serialize_field("w", &self.w)?;
+        s.serialize_field("w2", &self.w2)?;
+        s.serialize_field("d", &self.d)?;
+        s.serialize_field("lags", &self.lags)?;
+        if emit_p {
+            s.serialize_field("p", &self.p)?;
+        }
+        if emit_ring {
+            s.serialize_field("ring", &self.ring)?;
+        }
+        if emit_g {
+            s.serialize_field("g", &self.g)?;
+        }
+        if has_clock {
+            s.serialize_field("clock_hac", &self.clock_hac)?;
+        }
+        s.end()
+    }
 }
 
 impl Coverage {
@@ -225,12 +394,37 @@ impl Coverage {
             p: vec![0.0; lags],
             ring: VecDeque::with_capacity(lags),
             g: (lags > 0).then_some(0.0),
+            clock_hac: None,
         }
     }
 
-    /// Whether a restored accumulator is shaped for `q` and `lags`.
+    /// An empty coverage of the `q`-th quantile using clock-duration Bartlett
+    /// HAC over bandwidth `bandwidth = 2 * embargo` (with optional exact
+    /// nanosecond bandwidth `bandwidth_ns`), bounded by `cap_bytes`.
+    pub fn with_clock_bandwidth(
+        q: f64,
+        bandwidth: f64,
+        bandwidth_ns: Option<i128>,
+        cap_bytes: u64,
+    ) -> Self {
+        Self {
+            q,
+            w: 0.0,
+            w2: 0.0,
+            d: 0.0,
+            lags: 0,
+            p: Vec::new(),
+            ring: VecDeque::new(),
+            g: None,
+            clock_hac: Some(ClockCoverageHac::new(bandwidth, bandwidth_ns, cap_bytes)),
+        }
+    }
+
+    /// Whether a restored accumulator is shaped for `q` and `lags` (with no
+    /// clock-duration HAC).
     pub fn has_shape(&self, q: f64, lags: usize) -> bool {
-        self.q == q
+        self.clock_hac.is_none()
+            && self.q == q
             && self.lags == lags
             && self.p.len() == lags
             && self.ring.len() <= lags
@@ -244,6 +438,40 @@ impl Coverage {
             && self
                 .g
                 .is_none_or(|g| g.is_finite() && g >= 0.0 && self.lags > 0)
+    }
+
+    /// Whether a restored accumulator is shaped for `q` and clock-duration HAC.
+    pub fn has_shape_clock(
+        &self,
+        q: f64,
+        bandwidth: f64,
+        bandwidth_ns: Option<i128>,
+        cap_bytes: u64,
+    ) -> bool {
+        self.q == q
+            && self.lags == 0
+            && self.p.is_empty()
+            && self.ring.is_empty()
+            && self.g.is_none()
+            && [self.w, self.w2, self.d].iter().all(|v| v.is_finite())
+            && self.w >= 0.0
+            && self.w2 >= 0.0
+            && self
+                .clock_hac
+                .as_ref()
+                .is_some_and(|ch| ch.has_shape(bandwidth, bandwidth_ns, cap_bytes))
+    }
+
+    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.clock_hac
+            .as_ref()
+            .and_then(ClockCoverageHac::state_over_cap)
+    }
+
+    pub fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.clock_hac
+            .as_mut()
+            .and_then(ClockCoverageHac::take_state_warning)
     }
 
     /// The clock moves on by a step whose decay is `lam`, with nothing
@@ -263,18 +491,28 @@ impl Coverage {
         self.d *= lam;
         self.p.iter_mut().for_each(|v| *v *= lam * lam);
         self.ring.iter_mut().for_each(|v| *v *= lam);
+        if let Some(ch) = self.clock_hac.as_mut() {
+            ch.age(lam);
+        }
     }
 
     /// The rows behind this one are no longer adjacent to it -- a capped gap
     /// or a session change -- so none is a lag of the next.
     pub fn clear_lags(&mut self) {
         self.ring.clear();
+        if let Some(ch) = self.clock_hac.as_mut() {
+            ch.clear_lags();
+        }
     }
 
     /// One scored row: its prediction, its outcome, the step's decay and its
     /// weight. A value that is not finite, or a weight of 0, only ages
     /// (CLAUDE.md hard rule 9).
     pub fn update(&mut self, pred: f64, y: f64, lam: f64, w: f64) {
+        if self.clock_hac.is_some() {
+            self.update_at(pred, y, lam, w, 1.0, None);
+            return;
+        }
         self.age(lam);
         if !(pred.is_finite() && y.is_finite() && w > 0.0) {
             return;
@@ -296,6 +534,45 @@ impl Coverage {
         }
     }
 
+    /// One scored row with clock step `d_clock` and optional exact [`Stamp`].
+    pub fn update_at(
+        &mut self,
+        pred: f64,
+        y: f64,
+        lam: f64,
+        w: f64,
+        d_clock: f64,
+        stamp: Option<Stamp>,
+    ) {
+        let Some(ch) = self.clock_hac.as_mut() else {
+            self.update(pred, y, lam, w);
+            return;
+        };
+        if !(w > 0.0 && w.is_finite()) {
+            if lam != 1.0 {
+                self.w *= lam;
+                self.w2 *= lam * lam;
+                self.d *= lam;
+                ch.age(lam);
+            }
+            return;
+        }
+        if !(pred.is_finite() && y.is_finite()) {
+            self.w *= lam;
+            self.w2 *= lam * lam;
+            self.d *= lam;
+            ch.age_and_step(lam, d_clock, stamp);
+            return;
+        }
+        let d = f64::from(u8::from(y < pred)) - self.q;
+        let u = w * d;
+        if ch.try_update(u, lam, d_clock, stamp) {
+            self.w = self.w * lam + w;
+            self.w2 = self.w2 * lam * lam + w * w;
+            self.d = self.d * lam + u;
+        }
+    }
+
     /// The EW share of rows whose outcome fell below the prediction: `None`
     /// before the first scored row.
     pub fn coverage(&self) -> Option<f64> {
@@ -312,6 +589,16 @@ impl Coverage {
     pub fn wald(&self) -> Option<f64> {
         if self.w2 <= 0.0 {
             return None;
+        }
+        if let Some(ch) = &self.clock_hac {
+            let lagged = ch.lagged();
+            let null = self.q * (1.0 - self.q) * self.w2 + 2.0 * lagged;
+            let var = if null > 0.0 {
+                null
+            } else {
+                ch.empirical_lag0() + 2.0 * lagged
+            };
+            return (var > 0.0).then(|| self.d * self.d / var);
         }
         let l1 = self.lags as f64 + 1.0;
         let lagged: f64 = self
@@ -816,6 +1103,7 @@ mod tests {
         let odd = Calibration {
             joint: crate::EwCov::new(2).without_runs(),
             hac: Some(crate::Sandwich::new(1, true, 0)),
+            clock_hac: None,
         };
         assert!(!odd.has_shape(0));
     }

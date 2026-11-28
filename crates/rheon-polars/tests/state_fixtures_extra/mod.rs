@@ -48,6 +48,42 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_hmm_bocpd_ext", "bocpd obs_var", |p, v| {
             p.contains(".obs_var.") && v.as_f64() == Some(0.5)
         }),
+        // Clocked-embargo calibration HAC (schema 72, before any release).
+        (
+            "bank_calibration_clock_embargo",
+            "Calibration clock_hac bread",
+            |p, v| {
+                p.contains(".calibration.")
+                    && p.contains(".clock_hac.bread.")
+                    && v.as_f64().is_some_and(|x| x > 0.0)
+            },
+        ),
+        (
+            "bank_calibration_clock_embargo",
+            "Calibration clock_hac temporal bandwidth_ns",
+            |p, v| {
+                p.contains(".calibration.") && p.ends_with(".clock_hac.bandwidth_ns") && !v.is_nil()
+            },
+        ),
+        (
+            "bank_calibration_clock_embargo",
+            "Calibration clock_hac temporal Stamp::Ns",
+            |p, _| {
+                p.contains(".calibration.")
+                    && p.contains(".clock_hac.ring.")
+                    && p.ends_with(".stamp.Ns")
+            },
+        ),
+        (
+            "bank_calibration_clock_embargo",
+            "Coverage clock_hac ring",
+            |p, v| {
+                p.contains(".coverage.")
+                    && p.contains(".clock_hac.ring.")
+                    && p.ends_with(".u")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
         ("bank", "ClockValue::I64", |p, _| {
             p.ends_with(".prev_clock.I64")
         }),
@@ -1640,4 +1676,33 @@ fn a_conformal_radius_of_schema_66_is_shown_then_converted() {
     let next = row(&mut bank, 61);
     let (pred, sigma) = (read(&next, "pred_y"), read(&next, "sigma_y"));
     assert_eq!(read(&next, "hi_y").to_bits(), (pred + m * sigma).to_bits());
+}
+
+/// Specs of `bank_calibration_clock_embargo`: numeric and temporal clocked
+/// `embargo` with `emit_calibration=true` and no explicit `horizon_rows`
+/// (exercising both `Calibration::clock_hac` and `Coverage::clock_hac`, plus
+/// `Stamp::Raw` and `Stamp::Ns`).
+pub(super) fn calibration_clock_embargo_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "cal_num", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 10.0, "gap_cap": 50.0, "weight": "w", "min_weight": 0.0, "min_settled_frac": 0.0, "max_error_inflation": "inf", "embargo": 3.0, "emit_calibration": true, "max_state_bytes": 65536}"#,
+        r#"{"name": "cal_ts", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "ts", "half_life": "10s", "gap_cap": "1m", "weight": "w", "min_weight": 0.0, "min_settled_frac": 0.0, "max_error_inflation": "inf", "embargo": "3s", "emit_calibration": true, "max_state_bytes": 65536}"#,
+        r#"{"name": "cov_num", "model": {"type": "quantile", "quantile": 0.8}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 10.0, "gap_cap": 50.0, "weight": "w", "min_weight": 0.0, "min_settled_frac": 0.0, "embargo": 3.0, "emit_calibration": true, "max_state_bytes": 65536}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+pub(super) fn calibration_clock_embargo_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(calibration_clock_embargo_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+pub(super) fn calibration_clock_embargo_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&calibration_clock_embargo_specs(), bytes, input)
 }

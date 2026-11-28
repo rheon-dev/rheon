@@ -1377,8 +1377,8 @@ fn process<'s>(
                             }
                             // A state the data sizes that a row would have taken
                             // past its cap: the model learned no row after it.
-                            if let Some((bytes, cap)) = stream.state_over_cap() {
-                                outs.push((si, Err(over_state_cap(spec, key, bytes, cap))));
+                            if let Some((bytes, cap, owner)) = stream.state_over_cap() {
+                                outs.push((si, Err(over_state_cap(spec, key, bytes, cap, owner))));
                                 break 'segments;
                             }
                         }

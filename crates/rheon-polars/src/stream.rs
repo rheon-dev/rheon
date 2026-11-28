@@ -1055,6 +1055,14 @@ pub struct Stream {
     group_hash: u64,
 }
 
+/// Which bounded-state subsystem hit `max_state_bytes` on a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateCapOwner {
+    Model,
+    ConformalP,
+    CalibrationClock,
+}
+
 impl Stream {
     /// The first of this stream's windows to pass a refusing budget -- a
     /// model instance's, or a spread's ring (S1): its ring's bytes and its
@@ -1073,12 +1081,13 @@ impl Stream {
             })
     }
 
-    /// The first of this stream's models whose state a row would have taken
-    /// past its cap: the bytes and the cap ([`OnlineModel::state_over_cap`]).
-    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
+    /// The first of this stream's models or diagnostics whose state a row would
+    /// have taken past its cap: `(bytes, cap, owner)`.
+    pub fn state_over_cap(&self) -> Option<(u64, u64, StateCapOwner)> {
         self.models
             .iter()
             .find_map(|(_, m)| m.state_over_cap())
+            .map(|(b, c)| (b, c, StateCapOwner::Model))
             .or_else(|| {
                 let n_rings = (self
                     .persisted
@@ -1092,7 +1101,33 @@ impl Stream {
                     .iter()
                     .flatten()
                     .find_map(ConformalPRing::state_over_cap)
-                    .map(|(b, c)| (b.saturating_mul(n_rings), c.saturating_mul(n_rings)))
+                    .map(|(b, c)| {
+                        (
+                            b.saturating_mul(n_rings),
+                            c.saturating_mul(n_rings),
+                            StateCapOwner::ConformalP,
+                        )
+                    })
+            })
+            .or_else(|| {
+                let n_slots = (self
+                    .persisted
+                    .checks
+                    .iter()
+                    .map(|ch| ch.calibration.len().max(ch.coverage.len()))
+                    .sum::<usize>() as u64)
+                    .max(1);
+                self.persisted
+                    .checks
+                    .iter()
+                    .find_map(Checks::calibration_over_cap)
+                    .map(|(b, c)| {
+                        (
+                            b.saturating_mul(n_slots),
+                            c.saturating_mul(n_slots),
+                            StateCapOwner::CalibrationClock,
+                        )
+                    })
             })
     }
 
@@ -1426,7 +1461,7 @@ mod weightless;
 use notified::span_name;
 pub use notified::{Notice, Notified};
 use pre_row_sigma::pre_row_sigma;
-use state_cap::state_cap_notice;
+use state_cap::{calibration_cap_notice, state_cap_notice};
 pub(crate) use state_cap::{cap_words, fixed_span};
 use unmet_floor::{
     Projection, inflation_notice, unmet_floor_notice, unsolved_notice, unstable_rate_notice,
@@ -4878,8 +4913,22 @@ fn run_instance(
                 }
                 c.read_health_ks(xs.len(), n_rows, ri, inst.o_health_ks);
             }
-            if learn {
-                c.learn(inst.check_cfg, d_clock, &row, &sc.z, w, diag_ready);
+            if learn
+                && let Some((bytes, _per_cap)) = c.learn(
+                    inst.check_cfg,
+                    d_clock,
+                    plan.stamp,
+                    &row,
+                    &sc.z,
+                    w,
+                    diag_ready,
+                )
+            {
+                let n_slots_total = inst.spec.calibration_clock_slot_count().max(1);
+                let group_cap = inst.spec.calibration_clock_cap_bytes();
+                let group_bytes = bytes.saturating_mul(n_slots_total);
+                inst.notified
+                    .raise(calibration_cap_notice(inst.spec, group_bytes, group_cap));
             }
         }
 

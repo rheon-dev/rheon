@@ -967,3 +967,96 @@ fn a_huber_state_that_emits_a_scale_its_spec_does_not_is_refused() {
         .fit_predict(&frame())
         .unwrap();
 }
+
+/// STATE-3: a saved clocked-embargo calibration state is refused at load when
+/// its clock-HAC configuration (`embargo`, `max_state_bytes`, or presence vs
+/// `horizon_rows`) does not match the spec, or when a ring entry is damaged.
+#[test]
+fn a_clocked_embargo_calibration_state_of_wrong_shape_is_refused() {
+    let make = |extra: &str| {
+        spec(&format!(
+            r#"{{"name": "m", "model": {{"type": "ewridge"}}, "targets": ["y"],
+                "features": ["x"], "clock": "t", "gap_cap": 10.0, "half_life": 5.0,
+                "min_weight": 0.0, "max_error_inflation": "inf",
+                "emit_calibration": true, {extra}}}"#
+        ))
+    };
+    let s_base = make(r#""embargo": 2.0, "max_state_bytes": 65536"#);
+    let s_diff_embargo = make(r#""embargo": 4.0, "max_state_bytes": 65536"#);
+    let s_diff_cap = make(r#""embargo": 2.0, "max_state_bytes": 131072"#);
+    let s_horizon = make(r#""embargo": 2.0, "horizon_rows": 2"#);
+
+    let df = df!(
+        "t" => (0..40).map(|i| i as f64).collect::<Vec<_>>(),
+        "x" => (0..40).map(|i| (i as f64) * 0.25 + 1.0).collect::<Vec<_>>(),
+        "y" => (0..40).map(|i| (i as f64) * 0.5 + 2.0 + if i % 2 == 0 { 0.1 } else { -0.1 }).collect::<Vec<_>>()
+    )
+    .unwrap();
+    let mut bank = Bank::new(vec![s_base.clone()]).unwrap();
+    bank.fit_predict(&df).unwrap();
+    let bytes = bank.save_bytes().unwrap();
+    assert!(Bank::load_bytes(&bytes, Some(std::slice::from_ref(&s_base))).is_ok());
+
+    // Mismatched specs against the saved bytes must be refused at load.
+    for (what, other) in [
+        ("different embargo", &s_diff_embargo),
+        ("different max_state_bytes", &s_diff_cap),
+        ("explicit horizon_rows", &s_horizon),
+    ] {
+        assert!(
+            Bank::load_bytes(&bytes, Some(std::slice::from_ref(other))).is_err(),
+            "{what}: loaded unexpectedly"
+        );
+    }
+
+    // Swapping a discrete-horizon calibration state into a clocked-embargo spec
+    // file (and vice versa) must be refused by Checks::fits.
+    let mut bank_h = Bank::new(vec![s_horizon.clone()]).unwrap();
+    bank_h.fit_predict(&df).unwrap();
+    let h_file: BankFile = rmp_serde::from_slice(&bank_h.save_bytes().unwrap()).unwrap();
+    let swapped = reencoded(&bytes, |f| {
+        f.states[0][0].1.persisted.checks = h_file.states[0][0].1.persisted.checks.clone();
+    });
+    assert!(
+        Bank::load_bytes(&swapped, None).is_err(),
+        "discrete calibration loaded into clocked-embargo spec"
+    );
+
+    // Corrupted non-finite value inside clock_hac ring must be refused at load.
+    let mut v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+    fn corrupt_clock_hac_ring(v: &mut rmpv::Value) -> bool {
+        match v {
+            rmpv::Value::Map(entries) => {
+                for (k, val) in entries.iter_mut() {
+                    if k.as_str() == Some("clock_hac")
+                        && let rmpv::Value::Map(ch) = val
+                    {
+                        for (ck, cv) in ch.iter_mut() {
+                            if ck.as_str() == Some("bread")
+                                && let rmpv::Value::Array(arr) = cv
+                                && !arr.is_empty()
+                            {
+                                arr[0] = rmpv::Value::F64(f64::NAN);
+                                return true;
+                            }
+                        }
+                    }
+                    if corrupt_clock_hac_ring(val) {
+                        return true;
+                    }
+                }
+                false
+            }
+            rmpv::Value::Array(arr) => arr.iter_mut().any(corrupt_clock_hac_ring),
+            _ => false,
+        }
+    }
+    assert!(corrupt_clock_hac_ring(&mut v), "clock_hac.bread not found");
+    let mut corrupted = Vec::new();
+    rmpv::encode::write_value(&mut corrupted, &v).unwrap();
+    let corrupted = crate::reseal(&corrupted);
+    assert!(
+        Bank::load_bytes(&corrupted, None).is_err(),
+        "corrupted clock_hac.bread loaded"
+    );
+}

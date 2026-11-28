@@ -70,6 +70,7 @@ mod boundary;
 mod breaks;
 mod budget;
 mod calibration;
+mod class_metrics;
 mod clock;
 mod clock_drift;
 mod clock_span;
@@ -184,7 +185,14 @@ pub use audit::{
 pub use bandit::{BANDIT_MAX_STATE_BYTES, Bandit, BanditCfg, BanditPolicy};
 pub use bocpd::{Bocpd, BocpdCfg, BocpdCfgExtras, BocpdEmission, neg_binomial_hazard};
 pub use breaks::{Breaks, TwinFit, cusum_null, cusum_null_at, cusum_null_window, cusum_sq_null_at};
-pub use calibration::{Calibration, Coverage};
+pub use calibration::{
+    CLOCK_COVERAGE_HAC_ENTRY_BYTES, CLOCK_COVERAGE_HAC_FIXED_BYTES, CLOCK_HAC_ENTRY_BYTES,
+    CLOCK_HAC_FIXED_BYTES, Calibration, ClockCoverageHac, ClockHac, Coverage,
+};
+pub use class_metrics::{
+    ClassMetrics, ClassMetricsSummary, DEFAULT_CLASS_METRICS_BINS,
+    DEFAULT_CLASS_METRICS_COMPRESSION, ReliabilityBin, ReliabilityBinRow, ReliabilityBins,
+};
 pub use clock::{
     ClockAdvance, ClockCfg, ClockState, ClockValue, Decay, Disorder, ExactCaps, OnClockReset,
     PlainStep, SessionGap, Stamp, cmp_int_f64, ns_of_seconds, seconds_of_ns,
