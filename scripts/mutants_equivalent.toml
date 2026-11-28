@@ -430,8 +430,8 @@ so `>= 0` admits nothing more; the first `>` is caught \
 file = "crates/rheon-core/src/bocpd.rs"
 function = "Bocpd::read"
 mutation = "replace > with >="
-line_has = "if pre[i] > 0.0 {"
-why = """at `pre[i] = 0` the mutant's `ln 0 + ln π = −∞` is the `−∞` the \
+line_has = "if p > 0.0 {"
+why = """at `p = 0` the mutant's `ln 0 + ln π = −∞` is the `−∞` the \
 other branch gives: a log density is never `+∞`, and a NaN one makes the \
 row's normaliser NaN and the row null either way"""
 
@@ -4172,9 +4172,9 @@ overwrites `zbuf[0..]` completely"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl OnlineModel for Sgd>::step_into"
+function = "Sgd::admit_span_refit"
 mutation = "replace > with >="
-line_has = "let cand = weight > 0.0"
+line_has = "weight > 0.0 && y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());"
 why = """`upper` is a fast-path upper bound on `span_row_delta` (`age_bytes <= 32 \
 < 40 <= per_refit`); at `weight == 0.0` raising `upper` only causes `span_row_delta` \
 to run, which rejects `weight <= 0.0` and returns the exact `age_bytes`, and \
@@ -4182,10 +4182,10 @@ to run, which rejects `weight <= 0.0` and returns the exact `age_bytes`, and \
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl OnlineModel for Sgd>::step_into"
+function = "Sgd::admit_span_refit"
 mutation = "replace && with ||"
-line_has = "&& y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());"
-columns = [63]
+line_has = "weight > 0.0 && y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());"
+columns = [72]
 why = """as the `weight > 0.0` entry above: raising `upper` from `age_bytes` to \
 `per_refit` only enters `span_row_delta`, which checks `!yj.is_finite()` and \
 `self.label(yj)?` identically, and `HeldCap::admit` has no side effect when \
@@ -4193,7 +4193,7 @@ why = """as the `weight > 0.0` entry above: raising `upper` from `age_bytes` to 
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl OnlineModel for Sgd>::step_into"
+function = "Sgd::admit_span_refit"
 mutation = "replace + with *"
 line_has = "if held + upper > limit {"
 why = """at least one `RefitBuf` is open, so `held >= 32` (`size_of::<Option<Stamp>>()`), \
@@ -4205,7 +4205,7 @@ with the exact same half-cap warning that `HeldCap::note` records at the end of 
 
 [[equivalent]]
 file = "crates/rheon-core/src/sgd.rs"
-function = "<impl OnlineModel for Sgd>::step_into"
+function = "Sgd::admit_span_refit"
 mutation = "replace > with >="
 line_has = "if held + upper > limit {"
 why = """`self.over.is_none()` is checked above and `delta <= upper`, so at \
