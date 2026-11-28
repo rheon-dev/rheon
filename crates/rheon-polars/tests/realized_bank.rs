@@ -99,24 +99,24 @@ fn cfg(decay: f64) -> RealizedCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: None,
-        lm_beta: 0.99,
+        lm_window_rows: None,
+        lm_confidence: 0.99,
         max_state_bytes: None,
     }
 }
 
 /// The bank's fields are the core model's on the same rows, to the bit:
-/// under a decay with `lm_window`, a window of rows, and a window of clock
+/// under a decay with `lm_window_rows`, a window of rows, and a window of clock
 /// units under either edge; `lm_jump` is a Boolean, null where `lm` is.
 #[test]
 fn the_banks_fields_are_the_models() {
     let df = frame(&[("a", 800)], 3);
     let cases: [(&str, &str, RealizedCfg); 4] = [
         (
-            r#", "lm_window": 50"#,
+            r#", "lm_window_rows": 50"#,
             r#""half_life": 60.0,"#,
             RealizedCfg {
-                lm_window: Some(50),
+                lm_window_rows: Some(50),
                 ..cfg(60.0)
             },
         ),
@@ -137,12 +137,12 @@ fn the_banks_fields_are_the_models() {
             },
         ),
         (
-            r#", "window_size": 30.0, "closed": "both", "lm_beta": 0.9"#,
+            r#", "window_size": 30.0, "closed": "both", "lm_confidence": 0.9"#,
             r#""half_life": "inf","#,
             RealizedCfg {
                 window_clock: Some(30.0),
                 closed: WindowClosed::Both,
-                lm_beta: 0.9,
+                lm_confidence: 0.9,
                 ..cfg(f64::INFINITY)
             },
         ),
@@ -233,10 +233,10 @@ fn chunking_and_a_save_change_nothing() {
         .chain(["weight_sum".to_string()])
         .collect();
     for (model, extra) in [
-        (r#", "lm_window": 40"#, r#""half_life": 25.0,"#),
+        (r#", "lm_window_rows": 40"#, r#""half_life": 25.0,"#),
         (r#", "window_rows": 50"#, r#""half_life": "inf","#),
         (
-            r#", "window_size": 12.5, "lm_window": 20"#,
+            r#", "window_size": 12.5, "lm_window_rows": 20"#,
             r#""half_life": "inf","#,
         ),
     ] {

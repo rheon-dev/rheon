@@ -215,7 +215,9 @@ MEANING: dict[str, str] = {
         "Lee and Mykland's statistic of this row's `<t>`: the return over the volatility of the "
         "returns before it; `sqrt(2/π)` times it is a standard normal without a jump"
     ),
-    "lm_jump_<t>": "whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test",
+    "lm_jump_<t>": (
+        "whether `lm_<t>` is a jump at confidence `lm_confidence`, by Lee and Mykland's test"
+    ),
     "lrv_<t>": (
         "a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a "
         "bandwidth of 3: each term's field is named `<term>_<t>`"
@@ -601,7 +603,7 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
         {"emit_distances": True, "emit_inertia": True},
     ),
     "dcc": ('margins="garch"', {"margins": "garch"}),
-    "ewm_moments": ("se=True", {"se": True}),
+    "ewm_moments": ("emit_se=True", {"emit_se": True}),
     "kalman": (
         "smooth_lag=5, emit_smoothed_se=True, emit_loglik=True, emit_mahal=True",
         {"smooth_lag": 5, "emit_smoothed_se": True, "emit_loglik": True, "emit_mahal": True},
@@ -767,7 +769,7 @@ OPTIONAL: list[tuple[str, str]] = [
         "`emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, "
         "`emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, "
         "`emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), "
-        "`emit_feature_health`, and `feature_ks_window` / `feature_ks_recent` "
+        "`emit_feature_health`, and `feature_ks_window_rows` / `feature_ks_recent_rows` "
         "(not `holt`'s, which has no features)",
         "[Is the model working?](DIAGNOSTICS.md), for the models that "
         "predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` "

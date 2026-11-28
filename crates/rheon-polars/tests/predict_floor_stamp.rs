@@ -1146,7 +1146,7 @@ fn hawkes_and_ewm_moments_window_with_min_weight_read_at_stamp() {
         max_state_bytes: None,
         clocked: true,
         lag_tolerance: None,
-        se: false,
+        emit_se: false,
         window_rows: None,
         window_clock: Some(1.3),
     })
@@ -1261,7 +1261,7 @@ fn any_model_predict_with_floor_at_gates_hawkes_and_ewm_moments() {
                 max_state_bytes: None,
                 clocked: true,
                 lag_tolerance: None,
-                se: false,
+                emit_se: false,
                 window_rows: None,
                 window_clock: Some(0.9),
             })

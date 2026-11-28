@@ -1,4 +1,4 @@
-//! The windows: `window_rows`, `window_clock` and `lm_window` (docs/PLAN.md
+//! The windows: `window_rows`, `window_clock` and `lm_window_rows` (docs/PLAN.md
 //! task 499, part 3), against the papers' estimators on the returns each
 //! window holds.
 
@@ -23,8 +23,8 @@ fn cfg(n: usize) -> RealizedCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: None,
-        lm_beta: DEFAULT_LM_BETA,
+        lm_window_rows: None,
+        lm_confidence: DEFAULT_LM_CONFIDENCE,
         max_state_bytes: None,
     }
 }
@@ -234,7 +234,7 @@ fn a_row_of_weight_zero_takes_no_place_in_a_window() {
         } else {
             c.window_rows = Some(120);
         }
-        c.lm_window = Some(50);
+        c.lm_window_rows = Some(50);
         let a = run(&mut Realized::new(c.clone()).unwrap(), &clean);
         let b = run(&mut Realized::new(c).unwrap(), &with);
         for (i, &j) in at.iter().enumerate() {
@@ -260,7 +260,7 @@ fn lm_window_is_the_papers_statistic() {
         let mut c = cfg(1);
         c.decay = Decay::Halflife(decay);
         c.window_rows = rows;
-        c.lm_window = Some(k);
+        c.lm_window_rows = Some(k);
         let mut m = Realized::new(c).unwrap();
         let steps = run(&mut m, &unit_rows(&r));
         let l = paper::lee_mykland(&r, k);
@@ -299,7 +299,7 @@ fn the_flag_is_the_papers_test_on_either_side_of_its_critical_value() {
     let r = sv_day(n, 62, true);
     let mut c = cfg(1);
     c.window_rows = Some(390);
-    c.lm_window = Some(200);
+    c.lm_window_rows = Some(200);
     let steps = run(&mut Realized::new(c).unwrap(), &unit_rows(&r));
     let jumps: Vec<usize> = [0.1, 0.3, 0.5, 0.7, 0.9]
         .iter()
@@ -316,7 +316,7 @@ fn the_flag_is_the_papers_test_on_either_side_of_its_critical_value() {
 }
 
 /// A save at any row, the window empty, filling, full or emptied, goes on to
-/// the bit, on either window and with `lm_window`; a clock window's stamps
+/// the bit, on either window and with `lm_window_rows`; a clock window's stamps
 /// handed by the caller included.
 #[test]
 fn a_saved_window_goes_on_to_the_bit() {
@@ -344,7 +344,7 @@ fn a_saved_window_goes_on_to_the_bit() {
         } else {
             c.window_rows = Some(80);
         }
-        c.lm_window = Some(25);
+        c.lm_window_rows = Some(25);
         let stamp =
             |i: usize| Stamp::Ns(rows[..=i].iter().map(|r| (r.0 * 1e9) as i128).sum::<i128>());
         for cut in [0, 1, 2, 3, 40, 80, 81, 299, 301, 520] {
@@ -377,7 +377,7 @@ fn a_saved_window_goes_on_to_the_bit() {
 #[test]
 fn a_window_of_rows_is_checked_against_the_cap_when_built() {
     let mut c = cfg(2);
-    c.lm_window = Some(50);
+    c.lm_window_rows = Some(50);
     c.window_rows = Some(1_000_000);
     let e = Realized::new(c.clone()).unwrap_err();
     let fits: usize = e
@@ -471,12 +471,21 @@ fn the_window_settings_are_checked() {
         },
         "takes no decay",
     );
-    refuse(&|c| c.lm_window = Some(2), "lm_window must be at least 3");
-    refuse(&|c| c.lm_beta = 1.0, "lm_beta must be above 0 and below 1");
-    refuse(&|c| c.lm_beta = 0.0, "lm_beta must be above 0 and below 1");
+    refuse(
+        &|c| c.lm_window_rows = Some(2),
+        "lm_window_rows must be at least 3",
+    );
+    refuse(
+        &|c| c.lm_confidence = 1.0,
+        "lm_confidence must be above 0 and below 1",
+    );
+    refuse(
+        &|c| c.lm_confidence = 0.0,
+        "lm_confidence must be above 0 and below 1",
+    );
     let mut c = cfg(1);
-    c.lm_window = Some(3);
-    c.lm_beta = 0.5;
+    c.lm_window_rows = Some(3);
+    c.lm_confidence = 0.5;
     c.window_rows = Some(1);
     assert!(Realized::new(c).is_ok());
 }

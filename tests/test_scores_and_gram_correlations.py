@@ -166,7 +166,7 @@ def test_every_function_reads_a_gram_without_its_intercept(gram: dict) -> None:
 
 
 def test_epps_invert_drops_the_intercept_too(gram: dict) -> None:
-    assert corr.epps_invert(gram, L=1).shape == (2, 2)
+    assert corr.epps_invert(gram, lags=1).shape == (2, 2)
 
 
 @pytest.mark.parametrize(

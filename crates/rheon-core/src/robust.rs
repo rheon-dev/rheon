@@ -453,11 +453,11 @@ pub struct RobustCfg {
     /// `hampel`, `ramsay`). Huber only.
     ///
     /// Custom `Serialize` skips this field (and `refit_clock`/`max_state_bytes`
-    /// when `None`) whenever `huber_norm` is `Huber`, keeping existing bytes
+    /// when `None`) whenever `norm` is `Huber`, keeping existing bytes
     /// identical; when non-default, all trailing fields are written explicitly
     /// so positional compact msgpack never shifts.
     #[serde(default)]
-    pub huber_norm: HuberNorm,
+    pub norm: HuberNorm,
 }
 
 impl Serialize for RobustCfg {
@@ -469,7 +469,7 @@ impl Serialize for RobustCfg {
                 crate::humanfloat::f64_or_tag::serialize(&self.0, s)
             }
         }
-        let custom_norm = !self.huber_norm.is_huber();
+        let custom_norm = !self.norm.is_huber();
         let has_cap = custom_norm || self.max_state_bytes.is_some();
         let has_clock = has_cap || self.refit_clock.is_some();
         let len = 20 + usize::from(has_clock) + usize::from(has_cap) + usize::from(custom_norm);
@@ -501,7 +501,7 @@ impl Serialize for RobustCfg {
             st.serialize_field("max_state_bytes", &self.max_state_bytes)?;
         }
         if custom_norm {
-            st.serialize_field("huber_norm", &self.huber_norm)?;
+            st.serialize_field("norm", &self.norm)?;
         }
         st.end()
     }
@@ -760,11 +760,11 @@ impl RobustCfg {
                          to inf for least squares."
                     ));
                 }
-                if self.huber_norm == HuberNorm::Ramsay && !delta.is_finite() {
+                if self.norm == HuberNorm::Ramsay && !delta.is_finite() {
                     no.refuse(format!(
-                        "{kind}: huber_delta must be finite under huber_norm=\"ramsay\", \
+                        "{kind}: huber_delta must be finite under norm=\"ramsay\", \
                          but it is {delta}. Set huber_delta to a finite positive value such as \
-                         0.3, or use huber_norm=\"huber\"."
+                         0.3, or use norm=\"huber\"."
                     ));
                 }
                 if let Some(d) = self.huber_scale_decay {
@@ -778,10 +778,10 @@ impl RobustCfg {
                          quantile to the level to fit, such as 0.5 for the median."
                     ));
                 }
-                if !self.huber_norm.is_huber() {
+                if !self.norm.is_huber() {
                     no.refuse(format!(
-                        "{kind}: huber_norm applies only to huber, not quantile. Leave \
-                         huber_norm out, or fit with huber."
+                        "{kind}: norm applies only to huber, not quantile. Leave \
+                         norm out, or fit with huber."
                     ));
                 }
                 // The band is drawn in the residuals' MAD (a spec's), or
@@ -1672,7 +1672,7 @@ impl Robust {
                 // nothing.
                 let w_rob = match scale {
                     Some(scale) if pred.is_finite() => {
-                        if self.cfg.huber_norm.is_huber() {
+                        if self.cfg.norm.is_huber() {
                             let cut = delta * scale;
                             let a = (yj - pred).abs();
                             if a <= cut || a == 0.0 { 1.0 } else { cut / a }
@@ -1681,7 +1681,7 @@ impl Robust {
                             if a == 0.0 {
                                 1.0
                             } else {
-                                self.cfg.huber_norm.weight(a / scale, delta)
+                                self.cfg.norm.weight(a / scale, delta)
                             }
                         }
                     }
@@ -1768,7 +1768,7 @@ impl Robust {
         let (mut passes, mut solved) = (0, false);
         // The fit a pass replaced, whose vector the next pass writes over.
         let mut spare = Vec::new();
-        let norm = self.cfg.huber_norm;
+        let norm = self.cfg.norm;
         if norm.is_huber() {
             for _ in 0..REFIT_PASSES {
                 passes += 1;

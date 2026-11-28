@@ -583,7 +583,7 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
         else:
-            kw |= dict(half_life=steps(1, 30), lm_window=draw(st.integers(3, 12)))
+            kw |= dict(half_life=steps(1, 30), lm_window_rows=draw(st.integers(3, 12)))
     elif model == "power_variation":
         # Task 555: the terms over a window of the clock, with its edge, or
         # under a decay.

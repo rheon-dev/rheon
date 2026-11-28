@@ -658,7 +658,7 @@ def _lag_inversion(truth: float, seeds: int = 5) -> None:
         bank = rp.ModelBank([spec])
         bank.fit_predict(df)
         g = bank.gram("c")[0]
-        curves.append([float(corr.epps_invert(g, L=L)[0, 1]) for L in ls])
+        curves.append([float(corr.epps_invert(g, lags=L)[0, 1]) for L in ls])
     c = np.asarray(curves)
     mean, sd = c.mean(0), c.std(0, ddof=1)
     best = int(np.argmax(mean))

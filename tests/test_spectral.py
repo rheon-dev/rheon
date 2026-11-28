@@ -103,7 +103,7 @@ def test_lomb_scargle_is_scipys_with_the_decay_as_weights(detrend, h):
     df = pl.DataFrame({"t": t, "y": y, "w": w})
     periods = [8.0, 21.0, 1.3]
     spec = rp.spec.spectral(
-        "s", targets=["y"], periods=periods, scaling="lomb_scargle", detrend=detrend,
+        "s", targets=["y"], periods=periods, method="lomb_scargle", detrend=detrend,
         clock="t", gap_cap=10.0, weight="w", half_life=h,
     )  # fmt: skip
     out = _out(spec, df)
@@ -124,24 +124,41 @@ def test_lomb_scargle_is_scipys_with_the_decay_as_weights(detrend, h):
 def test_lomb_scargle_takes_a_period_past_the_even_clocks_limit():
     """A period below twice ``spacing`` is refused for a periodogram and
     taken for Lomb-Scargle; an infinite one is refused, by the spec for
-    every scaling and by the model under Lomb-Scargle."""
+    every method and by the model under Lomb-Scargle."""
     df = _signal(50, 5)
     with pytest.raises(ValueError, match="Nyquist"):
         _out(rp.spec.spectral("s", targets=["y"], periods=[1.5], half_life=50.0), df)
-    ls = rp.spec.spectral("s", targets=["y"], periods=[1.5], scaling="lomb_scargle", half_life=50.0)
+    ls = rp.spec.spectral("s", targets=["y"], periods=[1.5], method="lomb_scargle", half_life=50.0)
     assert _out(ls, df)["power_y_p0"][-1] >= 0.0
     with pytest.raises(ValueError, match="finite"):
         _out(
             rp.spec.spectral(
-                "s", targets=["y"], periods=[float("inf")], scaling="lomb_scargle", half_life=50.0
+                "s", targets=["y"], periods=[float("inf")], method="lomb_scargle", half_life=50.0
             ),
             df,
         )
+    with pytest.raises(ValueError, match="scaling"):
+        rp.spec.spectral(
+            "s",
+            targets=["y"],
+            periods=[8.0],
+            method="lomb_scargle",
+            scaling="density",
+            half_life=50.0,
+        )
+    with pytest.raises(ValueError, match="scaling"):
+        rp.spec.spectral(
+            "s",
+            targets=["y"],
+            periods=[8.0],
+            scaling="lomb_scargle",  # type: ignore[arg-type]
+            half_life=50.0,
+        )
 
 
-@pytest.mark.parametrize("scaling", ["density", "lomb_scargle"])
+@pytest.mark.parametrize("method", ["dft", "lomb_scargle"])
 @pytest.mark.parametrize("h", [float("inf"), 80.0])
-def test_a_window_is_scipys_over_its_rows(scaling, h):
+def test_a_window_is_scipys_over_its_rows(method, h):
     """Under ``window_size`` the power before row ``end`` is scipy's
     ``periodogram`` (or ``lombscargle``) of the rows before it that are
     less than ``window_size`` old, the decay's amplitudes as the window
@@ -153,7 +170,7 @@ def test_a_window_is_scipys_over_its_rows(scaling, h):
     ks = [7, 30, 51]
     periods = [1.0 / grid[k] for k in ks]
     spec = rp.spec.spectral(
-        "s", targets=["y"], periods=periods, spacing=step, scaling=scaling,
+        "s", targets=["y"], periods=periods, spacing=step, method=method,
         clock="t", gap_cap=10.0, half_life=h, window_size=size,
     )  # fmt: skip
     out = _out(spec, df)
@@ -162,7 +179,7 @@ def test_a_window_is_scipys_over_its_rows(scaling, h):
         tau = df["t"].to_numpy()[end - rows : end]
         a = 0.5 ** ((tau[-1] - tau) / h)
         got = [out[f"power_y_p{j}"][end] for j in range(len(ks))]
-        if scaling == "density":
+        if method == "dft":
             m = np.sum(a * x) / np.sum(a)
             _, p = periodogram(x - m, fs=1 / step, window=a, detrend=False)
             want = [p[k] for k in ks]
@@ -183,16 +200,16 @@ def test_a_cycle_stands_out():
     assert p8 > 20 * p5 and p32 > 5 * p5
 
 
-@pytest.mark.parametrize("scaling", ["density", "lomb_scargle"])
+@pytest.mark.parametrize("method", ["dft", "lomb_scargle"])
 @pytest.mark.parametrize("cut", [1, 333, 998])
-def test_chunks_and_a_save_go_on_to_the_bit(cut, scaling):
+def test_chunks_and_a_save_go_on_to_the_bit(cut, method):
     df = _signal(1000, 4).with_columns(
         pl.Series("g", np.where(np.arange(1000) % 3 == 0, "a", "b")),
         pl.Series("w", np.where(np.arange(1000) % 11 == 4, 0.0, 1.5)),
     )
     s = rp.spec.spectral(
         "s", targets=["y"], periods=[8.0, 3.2], group="g", weight="w", half_life=40.0,
-        scaling=scaling,
+        method=method,
     )  # fmt: skip
     one = rp.ModelBank([s]).fit_predict(df)
     a = rp.ModelBank([s])

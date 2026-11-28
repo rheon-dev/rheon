@@ -1280,7 +1280,10 @@ fn a_realized_window_past_its_state_cap_is_refused() {
         r#"{"type": "realized", "window_rows": 100000, "max_state_bytes": 30000000}"#,
         r#""inf""#,
     ));
-    accepted(&spec(r#"{"type": "realized", "lm_window": 300}"#, "50.0"));
+    accepted(&spec(
+        r#"{"type": "realized", "lm_window_rows": 300}"#,
+        "50.0",
+    ));
     accepted(&spec(
         r#"{"type": "realized", "window_size": 20.0, "closed": "both"}"#,
         r#""inf""#,
@@ -1294,12 +1297,12 @@ fn a_realized_window_past_its_state_cap_is_refused() {
         &["window_size must be a finite span of the clock above 0"],
     );
     refused(
-        &spec(r#"{"type": "realized", "lm_window": 2}"#, "50.0"),
-        &["lm_window must be at least 3"],
+        &spec(r#"{"type": "realized", "lm_window_rows": 2}"#, "50.0"),
+        &["lm_window_rows must be at least 3"],
     );
     refused(
-        &spec(r#"{"type": "realized", "lm_beta": 1.0}"#, "50.0"),
-        &["lm_beta must be above 0 and below 1"],
+        &spec(r#"{"type": "realized", "lm_confidence": 1.0}"#, "50.0"),
+        &["lm_confidence must be above 0 and below 1"],
     );
     refused(
         &spec(r#"{"type": "realized", "closed": "both"}"#, "50.0"),

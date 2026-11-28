@@ -2813,13 +2813,13 @@ def ewm_profile(
     *,
     period: float | Duration,
     half_life: float | Duration,
-    buckets: int | None = None,
+    bins: int | None = None,
     harmonics: int | None = None,
     stat: Literal["mean", "var", "std", "quantile"] = "mean",
     quantile: float | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "left", "both", "none"] = "right",
-    offset: float | Duration | None = None,
+    origin: float | Duration | None = None,
     weight: str | pl.Expr | None = None,
     min_samples: int = 1,
     bias: bool | None = None,
@@ -2846,10 +2846,10 @@ def ewm_profile(
         ``"1w"`` on a temporal clock, a number of clock units on a numeric
         one, or a number of rows without a clock. A calendar unit (``"1mo"``,
         ``"1q"``, ``"1y"``) is refused, since a month has no fixed length.
-    ``buckets``
-        The bucketed form: how many equal phases the period is cut into, 24
+    ``bins``
+        The binned form: how many equal phases the period is cut into, 24
         for each hour of a day, 7 for each day of a week, 168 for each hour
-        of a week. A row reads its own phase's rows alone. Give ``buckets``
+        of a week. A row reads its own phase's rows alone. Give ``bins``
         or ``harmonics``, one of them.
     ``harmonics``
         The harmonic form: how many Fourier harmonics fit the profile, from
@@ -2888,7 +2888,7 @@ def ewm_profile(
         ``"right"`` and ``"none"`` do not; ``"both"`` holds the stamp's rows
         as ``"right"`` does and ``"none"`` leaves them out as ``"left"``
         does.
-    ``offset``
+    ``origin``
         Where the period starts after its default start: a duration such as
         ``"9h30m"`` for a session that opens at 09:30, or ``"6d"`` for a
         week that starts on Sunday. The default start is midnight, the
@@ -2910,8 +2910,8 @@ def ewm_profile(
     ``max_state_bytes``
         The most bytes one group's profile may hold, a whole number from 1
         to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 56
-        bytes a bucket, so the default holds 4,681 buckets, and a call whose
-        buckets pass its cap is refused before it reads a row, naming their
+        bytes a bin, so the default holds 4,681 bins, and a call whose
+        bins pass its cap is refused before it reads a row, naming their
         bytes. Under a ``window_size`` each row in a phase's window adds 80
         bytes (104 for a quantile), and a quantile's sketches 8 bytes a
         sketch bucket. The harmonic form's fit holds ``8 · (p(p + 1)/2 + 2p
@@ -2938,14 +2938,14 @@ def ewm_profile(
 
     ``TypeError``
         When ``input`` or ``weight`` is neither a column name nor a
-        ``pl.Expr``, ``period``, ``half_life`` or ``offset`` is neither a
-        number nor a duration, ``buckets`` or ``max_state_bytes`` is not an
+        ``pl.Expr``, ``period``, ``half_life`` or ``origin`` is neither a
+        number nor a duration, ``bins`` or ``max_state_bytes`` is not an
         integer, ``min_samples`` is not an integer (each a
         :class:`~rheon.WrongTypeError`), or ``bias`` is not ``True`` or
         ``False``.
     ``ValueError``
         When ``period``, ``half_life`` or ``window_size`` is not above 0,
-        ``buckets`` is below 1, ``stat`` or ``closed`` is not one of its
+        ``bins`` is below 1, ``stat`` or ``closed`` is not one of its
         words, ``quantile`` is not above 0 and below 1, ``min_samples`` is
         below 1, or ``max_state_bytes`` is below 1 or above 64 MiB. The run
         raises an error naming the row that would take a group's state past
@@ -2977,10 +2977,10 @@ def ewm_profile(
         out = rp.stream.with_windows(
             df,
             hourly=rp.ops.ewm_profile(
-                "delay", period="1d", buckets=24, half_life=float("inf")
+                "delay", period="1d", bins=24, half_life=float("inf")
             ),
             before=rp.ops.ewm_profile(
-                "delay", period="1d", buckets=24, half_life=float("inf"), closed="left"
+                "delay", period="1d", bins=24, half_life=float("inf"), closed="left"
             ),
             clock="t",
             gap_cap="7d",
@@ -2994,24 +2994,24 @@ def ewm_profile(
     .. rubric:: Notes
 
     **The phase** is the row's place in the period, read from its own clock
-    alone: ``t − t.dt.truncate(period)``, Polars' own, less the offset. On a
+    alone: ``t − t.dt.truncate(period)``, Polars' own, less the origin. On a
     clock with a time zone it is read on the wall clock in the column's own
     zone, as Polars' ``dt`` namespace reads a zoned value: on the day the
     clocks go forward, 05:00 is phase 5h, though four hours have passed
-    since midnight, so a rush hour stays in its own bucket across the
+    since midnight, so a rush hour stays in its own bin across the
     change. Without a clock the phase counts the group's rows of weight
-    above 0. Row ``i`` falls in bucket ``floor(buckets · phase / period)``.
+    above 0. Row ``i`` falls in bin ``floor(bins · phase / period)``.
 
-    **The statistic.** Each bucket keeps the weighted moments of its rows,
+    **The statistic.** Each bin keeps the weighted moments of its rows,
     each row weighed by its weight times ``0.5 ** (age / half_life)``, its
     age the clock between it and the row read: ``V1 = Σ w``, ``V2 = Σ w²``,
     the mean ``m = Σ w x / V1`` and ``M2 = Σ w (x − m)²``, in Welford's form.
     The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
-    A bucket decays by the clock whether or not a row falls in it.
+    A bin decays by the clock whether or not a row falls in it.
 
     **The harmonic form** fits ``f(φ) = a₀ + Σₖ aₖ cos 2πkφ + bₖ sin
     2πkφ`` to the rows by weighted least squares, each row weighed as a
-    bucket's are, ``φ`` the phase as a share of the period: with the basis
+    bin's are, ``φ`` the phase as a share of the period: with the basis
     ``z(φ)``, the Gram ``G = Σ w d z zᵀ`` and ``r = Σ w d z x``, the mean
     profile is ``z(φ)ᵀ G⁻¹ r``, and the variance the fit of ``x²`` less the
     square of the fit of ``x``. The oracle is statsmodels' ``WLS`` on the
@@ -3022,7 +3022,7 @@ def ewm_profile(
     never by a subtraction that would leave a rounding behind; a quantile's
     sketches leave the same way, as :func:`ewm_quantile`'s do.
 
-    **The state** is a group's buckets, ``56 · buckets`` bytes, and under a
+    **The state** is a group's bins, ``56 · bins`` bytes, and under a
     window the rows inside it, whatever the stream's length. The oracle is
     Polars' ``group_by`` over the phase on one chunk, with the decayed
     weights written out, and for a quantile NumPy's weighted
@@ -3031,14 +3031,14 @@ def ewm_profile(
     return profile(
         input,
         period=period,
-        buckets=buckets,
+        bins=bins,
         harmonics=harmonics,
         half_life=half_life,
         stat=stat,
         quantile=quantile,
         window_size=window_size,
         closed=closed,
-        offset=offset,
+        origin=origin,
         weight=weight,
         min_samples=min_samples,
         bias=bias,
@@ -3639,7 +3639,7 @@ def stl(
     period: int,
     seasonal: int = 7,
     component: Literal["trend", "seasonal", "resid"] = "trend",
-    window: int | None = None,
+    window_rows: int | None = None,
     lag: int | None = None,
     closed: Literal["left", "right"] = "left",
     trend: int | None = None,
@@ -3694,7 +3694,7 @@ def stl(
     ``component``
         ``"trend"`` (the default), ``"seasonal"`` or ``"resid"``, the
         remainder ``x - S - T``.
-    ``window``
+    ``window_rows``
         ``W``, the learned rows each decomposition reads. ``None`` (the
         default) is ``2 h + 1``, with ``h = max p (s - 1) / 2`` the seasonal
         smoother's reach, so the row read sits at the window's center.
@@ -3768,7 +3768,7 @@ def stl(
         iterate=2,
         season=None,
         component=component,
-        window=window,
+        window_rows=window_rows,
         lag=lag,
         closed=closed,
         trend=trend,
@@ -3796,7 +3796,7 @@ def mstl(
     iterate: int = 2,
     component: Literal["trend", "seasonal", "resid"] = "trend",
     season: int | None = None,
-    window: int | None = None,
+    window_rows: int | None = None,
     lag: int | None = None,
     closed: Literal["left", "right"] = "left",
     trend: int | None = None,
@@ -3840,7 +3840,7 @@ def mstl(
     ``component``
         ``"trend"`` (the default), ``"seasonal"`` or ``"resid"``, the
         remainder ``x - S - T``.
-    ``window``
+    ``window_rows``
         ``W``, the learned rows each decomposition reads. ``None`` (the
         default) is ``2 h + 1``, with ``h = max p (s - 1) / 2`` the seasonal
         smoother's reach, so the row read sits at the window's center.
@@ -3911,7 +3911,7 @@ def mstl(
         iterate=iterate,
         season=season,
         component=component,
-        window=window,
+        window_rows=window_rows,
         lag=lag,
         closed=closed,
         trend=trend,

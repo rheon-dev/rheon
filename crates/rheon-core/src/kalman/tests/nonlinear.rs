@@ -1117,11 +1117,11 @@ fn nonlinear_config_and_damaged_state_refusals() {
             },
             "forecast_spans is only supported for family=\"gaussian\" with link=\"identity\"",
         ),
-        // alpha <= 0
+        // ukf_alpha <= 0
         (
             KalmanCfg {
                 obs: KalmanObs {
-                    alpha: 0.0,
+                    ukf_alpha: 0.0,
                     ..obs_ukf(
                         KalmanFamily::Poisson,
                         KalmanLink::Log,
@@ -1131,13 +1131,13 @@ fn nonlinear_config_and_damaged_state_refusals() {
                 },
                 ..base_pois.clone()
             },
-            "alpha must be finite and above 0",
+            "ukf_alpha must be finite and above 0",
         ),
-        // kappa <= -k on Merwe
+        // ukf_kappa <= -k on Merwe
         (
             KalmanCfg {
                 obs: KalmanObs {
-                    kappa: -3.0,
+                    ukf_kappa: -3.0,
                     ..obs_ukf(
                         KalmanFamily::Poisson,
                         KalmanLink::Log,

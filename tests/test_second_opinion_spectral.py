@@ -178,7 +178,7 @@ def test_lomb_scargle_on_a_rectangular_window_is_scipys_unweighted(detrend):
     df = pl.DataFrame({"t": t, "y": y})
     periods = [8.0, 21.0, 1.3, 55.0]
     spec = rp.spec.spectral(
-        "s", targets=["y"], periods=periods, scaling="lomb_scargle", detrend=detrend,
+        "s", targets=["y"], periods=periods, method="lomb_scargle", detrend=detrend,
         clock="t", gap_cap=10.0, half_life=float("inf"),
     )  # fmt: skip
     out = rp.ModelBank([spec]).fit_predict(df).unnest("s")
@@ -229,7 +229,7 @@ def test_lomb_scargle_is_withheld_at_the_spread_threshold_and_scipys_above_it():
     below = _period_at_spread(tau, 3e-11)
     assert _spread(tau, above, False) > 1e-10 > _spread(tau, below, False)
     spec = rp.spec.spectral(
-        "s", targets=["y"], periods=[above, below], scaling="lomb_scargle", detrend=False,
+        "s", targets=["y"], periods=[above, below], method="lomb_scargle", detrend=False,
         clock="t", gap_cap=10.0, half_life=float("inf"),
     )  # fmt: skip
     last = rp.ModelBank([spec]).fit_predict(df).unnest("s")[-1]

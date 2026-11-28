@@ -226,10 +226,10 @@ def test_a_bad_call_is_refused_by_name_when_the_query_is_built(frames, error, wo
     assert words in str(e.value)
 
 
-def test_a_stream_without_the_by_column_and_a_bad_name_are_refused():
+def test_a_stream_without_the_group_column_and_a_bad_name_are_refused():
     a = pl.DataFrame({"t": [1], "g": ["A"]})
-    with pytest.raises(ColumnNotFoundError, match='input "1" has no by column "g"'):
-        rp.stream.merge(a, pl.DataFrame({"t": [1]}), clock="t", by="g")
+    with pytest.raises(ColumnNotFoundError, match='input "1" has no group column "g"'):
+        rp.stream.merge(a, pl.DataFrame({"t": [1]}), clock="t", group="g")
     with pytest.raises(WrongTypeError, match="a stream's name must be text"):
         rp.stream.merge({1: a}, clock="t")
 
@@ -289,14 +289,14 @@ def test_restart_after_step_back_takes_a_duration_on_a_temporal_clock():
         rp.stream.merge(pl.DataFrame({"t": [1.0]}), clock="t", restart_after_step_back=-1)
 
 
-def test_by_checks_each_groups_merged_rows_as_a_bank_would():
+def test_group_checks_each_groups_merged_rows_as_a_bank_would():
     """A group whose rows step back by little where its stream started
     again is refused, naming the group; another group is not."""
     a = pl.DataFrame({"g": ["A", "B", "A"], "t": [10.0, 20.0, 9.5]})
     with pytest.raises(_REFUSAL, match='the merged rows of g = "A" step back by 0.5'):
-        rp.stream.merge(a, clock="t", by="g", restart_after_step_back=1).height  # noqa: B018
+        rp.stream.merge(a, clock="t", group="g", restart_after_step_back=1).height  # noqa: B018
     b = pl.DataFrame({"g": ["A", "B", "A"], "t": [10.0, 20.0, 1.0]})
-    assert rp.stream.merge(b, clock="t", by="g", restart_after_step_back=1).height == 3
+    assert rp.stream.merge(b, clock="t", group="g", restart_after_step_back=1).height == 3
 
 
 def cut(frames: dict[str, pl.DataFrame], at: float, ties: dict[str, int]):
@@ -471,8 +471,8 @@ def test_restart_after_step_back_is_exact_past_104_days_and_2_to_53():
     assert rp.stream.merge(ok_i, ok_i, clock="t", restart_after_step_back=10**400).height == 4
 
 
-def test_merge_refuses_unreadable_by_dtype_at_build():
-    """Review 2026-11-23, MERGE-4 (1): an unreadable `by` dtype is refused when
+def test_merge_refuses_unreadable_group_dtype_at_build():
+    """Review 2026-11-23, MERGE-4 (1): an unreadable `group` dtype is refused when
     the merge is built, not mid-stream with a raw Polars error."""
     for s in [
         pl.Series("g", [[1, 2], [3]]),
@@ -480,5 +480,5 @@ def test_merge_refuses_unreadable_by_dtype_at_build():
         pl.Series("g", [{"a": 1}, {"a": 2}]),
     ]:
         df = pl.DataFrame({"t": [1.0, 2.0]}).with_columns(s)
-        with pytest.raises(TypeError, match='by column "g"'):
-            rp.stream.merge(df.lazy(), df.lazy(), clock="t", by="g")
+        with pytest.raises(TypeError, match='group column "g"'):
+            rp.stream.merge(df.lazy(), df.lazy(), clock="t", group="g")

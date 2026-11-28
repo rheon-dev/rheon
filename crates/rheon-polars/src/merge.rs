@@ -38,8 +38,8 @@
 //! its row, or, under `restart_after_step_back`, one larger than it starts
 //! the input again -- its `restarts` count goes up, and its later rows sort
 //! after every row of the earlier count, as a new day's rows after the last
-//! day's. And the merged rows are read as a bank grouped by `by` will read
-//! them (one group without `by`): a step back in a group's merged rows is
+//! day's. And the merged rows are read as a bank grouped by `group` will read
+//! them (one group without `group`): a step back in a group's merged rows is
 //! refused by the bank's rule too. Within one run of sorted inputs it never
 //! fires; it catches a resumed run whose inputs were cut at different
 //! clocks, and an input that did not start again where the others did.
@@ -59,7 +59,7 @@
 //!
 //! With `carry`, each column named is filled forward over the merged rows,
 //! as Polars' `forward_fill` fills it: a row where it is null takes its
-//! last non-null value in the merged rows before it, within the row's `by`
+//! last non-null value in the merged rows before it, within the row's `group`
 //! group. Beside it a column `<c>_age` gives the age of that value on the
 //! clock: the row's clock less the clock of the row the value came from, by
 //! Polars' own subtraction of the clock's dtype (`age.rs`); 0 on a row with
@@ -109,7 +109,7 @@ pub struct MergeConfig {
     pub source: String,
     /// The column a bank downstream groups by: the merged rows of each of its
     /// groups are checked as that bank checks them.
-    pub by: Option<String>,
+    pub group: Option<String>,
     /// `restart_after_step_back` in the clock's units -- integer nanoseconds
     /// on a temporal clock -- or `None`, which refuses every step back.
     pub restart: Option<Restart>,
@@ -187,7 +187,7 @@ struct Back {
 struct Block {
     df: DataFrame,
     keys: Vec<i64>,
-    /// Each row's group, under `by`; empty without it.
+    /// Each row's group, under `group`; empty without it.
     gids: Vec<u32>,
     /// The rows that start the input again, ascending.
     bumps: Vec<usize>,
@@ -306,13 +306,13 @@ pub struct Merge {
     clock_dtype: DataType,
     inputs: Vec<Input>,
     out_schema: Schema,
-    /// Group ids under `by`, by the key's text; the null key apart.
+    /// Group ids under `group`, by the key's text; the null key apart.
     gid_of: HashMap<String, u32, FixedState>,
     null_gid: Option<u32>,
     /// Each group's key, by id: the text, or `None` for the null key.
     group_keys: Vec<Option<String>>,
     /// The merged rows' last clock key in each group (one group without
-    /// `by`).
+    /// `group`).
     group_last: Vec<Option<i64>>,
     /// The heads of the inputs whose queue holds a row: (restarts, key,
     /// input), least first.
@@ -349,7 +349,7 @@ impl Merge {
     ///
     /// # Errors
     ///
-    /// No input or a name twice; an input without the clock or `by` column
+    /// No input or a name twice; an input without the clock or `group` column
     /// (`ColumnNotFound`); a clock that is neither numeric nor temporal, the
     /// inputs' clocks of different dtypes, or a column of one name with two
     /// dtypes (each a wrong type); `source` already an input's column.
@@ -392,7 +392,7 @@ impl Merge {
             }
         }
         for (name, schema) in names.iter().zip(&schemas) {
-            for (role, col) in [("clock", Some(&cfg.clock)), ("by", cfg.by.as_ref())] {
+            for (role, col) in [("clock", Some(&cfg.clock)), ("group", cfg.group.as_ref())] {
                 if let Some(col) = col
                     && schema.get(col).is_none()
                 {
@@ -467,23 +467,23 @@ impl Merge {
                 }
             }
         }
-        if let Some(by) = &cfg.by {
-            let dtype = out_schema.get(by).expect("checked above");
+        if let Some(group) = &cfg.group {
+            let dtype = out_schema.get(group).expect("checked above");
             let unreadable = matches!(
                 dtype,
                 DataType::Binary | DataType::List(_) | DataType::Array(..) | DataType::Struct(_)
             ) || crate::arrow::key_text(&Series::full_null(
-                by.as_str().into(),
+                group.as_str().into(),
                 1,
                 dtype,
             ))
             .is_err();
             if unreadable {
                 return Err(crate::wrong_type(format!(
-                    "{WHO}: by column {by:?} is {}, which cannot be read as group keys. Give a \
+                    "{WHO}: group column {group:?} is {}, which cannot be read as group keys. Give a \
                      column with one value per row, such as String or an integer; join a list's \
                      items into one, such as with \
-                     pl.col({by:?}).cast(pl.List(pl.String)).list.join(\",\").",
+                     pl.col({group:?}).cast(pl.List(pl.String)).list.join(\",\").",
                     dtype_text(dtype)
                 )));
             }
@@ -512,7 +512,7 @@ impl Merge {
                 rows_read: 0,
             })
             .collect();
-        let grouped = cfg.by.is_some();
+        let grouped = cfg.group.is_some();
         let names = StringChunked::from_iter_values(
             "".into(),
             inputs.iter().map(|i: &Input| i.name.as_str()),
@@ -576,8 +576,8 @@ impl Merge {
             };
             let role = if *c == cfg.clock {
                 Some("clock")
-            } else if cfg.by.as_ref() == Some(c) {
-                Some("by")
+            } else if cfg.group.as_ref() == Some(c) {
+                Some("group")
             } else {
                 None
             };
@@ -694,7 +694,7 @@ impl Merge {
             return Vec::new();
         }
         let row_word = if rows == 1 { "row" } else { "rows" };
-        let msg = if self.cfg.by.is_some() {
+        let msg = if self.cfg.group.is_some() {
             let grp_word = if groups == 1 { "group" } else { "groups" };
             format!(
                 "{WHO}: skipped {rows} stale {row_word} across {groups} {grp_word} under \
@@ -823,12 +823,12 @@ impl Merge {
         Ok((keys, bumps))
     }
 
-    /// Each row's group id under `by`, new groups given the next ids.
+    /// Each row's group id under `group`, new groups given the next ids.
     fn gids(&mut self, df: &DataFrame) -> PolarsResult<Vec<u32>> {
-        let Some(by) = &self.cfg.by else {
+        let Some(group) = &self.cfg.group else {
             return Ok(Vec::new());
         };
-        let text = crate::arrow::key_text(df.column(by)?.as_materialized_series())?;
+        let text = crate::arrow::key_text(df.column(group)?.as_materialized_series())?;
         let text = text.str()?;
         let mut out = Vec::with_capacity(text.len());
         for v in text.iter() {
@@ -999,10 +999,10 @@ impl Merge {
             ),
             None => format!("a row of input {:?} the state held", self.inputs[i].name),
         };
-        let whose = match (&self.cfg.by, &self.group_keys[gid]) {
+        let whose = match (&self.cfg.group, &self.group_keys[gid]) {
             (None, _) => "the merged rows step".to_string(),
-            (Some(by), Some(k)) => format!("the merged rows of {by} = {k:?} step"),
-            (Some(by), None) => format!("the merged rows of the null {by} step"),
+            (Some(group), Some(k)) => format!("the merged rows of {group} = {k:?} step"),
+            (Some(group), None) => format!("the merged rows of the null {group} step"),
         };
         polars_err!(ComputeError:
             "{WHO}: {whose} back by {} at {at}, {}, as a bank reading the merged rows would \

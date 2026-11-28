@@ -161,8 +161,8 @@ pub(super) fn profile_def(
     if let Some(w) = &op.window_size {
         p.spans.push(("window_size", w.clone()));
     }
-    if let Some(o) = &params.offset {
-        p.spans.push(("offset", o.clone()));
+    if let Some(o) = &params.origin {
+        p.spans.push(("origin", o.clone()));
     }
     let clock_dtype = config.clock.as_deref().and_then(|c| input.get(c));
     let temporal = clock_dtype.is_some_and(DataType::is_temporal);
@@ -171,7 +171,7 @@ pub(super) fn profile_def(
         Span::Units(u) => PhaseSpan::Units(*u),
     };
     let period = phase(&params.period);
-    let offset = match &params.offset {
+    let origin = match &params.origin {
         Some(o) => phase(o),
         None if temporal => PhaseSpan::Ns(0),
         None => PhaseSpan::Units(0.0),
@@ -191,9 +191,9 @@ pub(super) fn profile_def(
     };
     let def = ProfileDef {
         stat: params.stat,
-        buckets: params.buckets,
+        bins: params.bins,
         period,
-        offset,
+        origin,
         zone,
         half_life: half_life.value(),
         closed: op.closed,
@@ -217,11 +217,11 @@ pub(super) fn profile_def(
         } else {
             (
                 format!(
-                    "{} buckets of {} bytes each",
-                    def.buckets,
+                    "{} bins of {} bytes each",
+                    def.bins,
                     crate::windows::PROFILE_BUCKET_BYTES
                 ),
-                "buckets",
+                "bins",
             )
         };
         return Err(format!(
@@ -277,10 +277,10 @@ pub(super) fn stl_def(
         .iter()
         .map(|&(a, b)| (a as usize, b as usize))
         .collect();
-    let window = match params.window {
+    let window_rows = match params.window_rows {
         Some(w) => w,
         None => u32::try_from(rheon_core::default_window(&seasons)).map_err(|_| {
-            format!("{WHO}: {f}: {name}'s default window is too long. Give window.")
+            format!("{WHO}: {f}: {name}'s default window_rows is too long. Give window_rows.")
         })?,
     };
     let lag = match params.lag {
@@ -313,7 +313,7 @@ pub(super) fn stl_def(
         robust: params.robust,
         inner_iter: params.inner_iter,
         outer_iter: params.outer_iter,
-        window,
+        window_rows,
         lag,
         closed: params.closed,
         component: params.component,

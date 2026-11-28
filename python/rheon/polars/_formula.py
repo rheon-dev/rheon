@@ -1206,13 +1206,13 @@ def profile(
     *,
     period: Any,
     half_life: Any,
-    buckets: Any = None,
+    bins: Any = None,
     harmonics: Any = None,
     stat: Any = "mean",
     quantile: Any = None,
     window_size: Any = None,
     closed: Any = "right",
-    offset: Any = None,
+    origin: Any = None,
     weight: Any = None,
     min_samples: Any = 1,
     bias: Any = None,
@@ -1237,8 +1237,8 @@ def profile(
         "half_life": _span(who, "half_life", half_life, inf_ok=True),
         "period": _span(who, "period", period, inf_ok=False),
     }
-    if offset is not None:
-        params["offset"] = _offset(who, offset)
+    if origin is not None:
+        params["origin"] = _origin(who, origin)
     if window_size is not None:
         params["window_size"] = _span(who, "window_size", window_size, inf_ok=False)
     if closed not in ("right", "left", "both", "none"):
@@ -1247,23 +1247,23 @@ def profile(
             f"Set closed to one of those words."
         )
     params["closed"] = closed
-    if (buckets is None) == (harmonics is None):
+    if (bins is None) == (harmonics is None):
         raise TypeError(
-            f"{who}: give buckets or harmonics, one of them: how many equal phases the period "
+            f"{who}: give bins or harmonics, one of them: how many equal phases the period "
             f"is cut into, or how many Fourier terms fit it, but "
-            + ("both are given." if buckets is not None else "neither is given.")
-            + " Set one, such as buckets=24 for the hours of a day."
+            + ("both are given." if bins is not None else "neither is given.")
+            + " Set one, such as bins=24 for the hours of a day."
         )
-    if buckets is not None:
-        wrong = isinstance(buckets, bool) or not isinstance(buckets, numbers.Integral)
-        if wrong or not 1 <= buckets <= 2**32 - 1:
+    if bins is not None:
+        wrong = isinstance(bins, bool) or not isinstance(bins, numbers.Integral)
+        if wrong or not 1 <= bins <= 2**32 - 1:
             msg = (
-                f"{who}: buckets must be a whole number from 1 to {2**32 - 1}, but it is "
-                f"{buckets!r}. Set buckets to the number of phases of the period, such as 24 "
+                f"{who}: bins must be a whole number from 1 to {2**32 - 1}, but it is "
+                f"{bins!r}. Set bins to the number of phases of the period, such as 24 "
                 f"for the hours of a day."
             )
             raise WrongTypeError(msg) if wrong else ValueError(msg)
-        params["buckets"] = int(buckets)
+        params["bins"] = int(bins)
     else:
         wrong = isinstance(harmonics, bool) or not isinstance(harmonics, numbers.Integral)
         if wrong or not 1 <= harmonics <= MAX_HARMONICS:
@@ -1277,7 +1277,7 @@ def profile(
             raise ValueError(
                 f'{who}: harmonics takes stat "mean", "var" or "std" and no bias: a Fourier '
                 f"fit's variance is the fit of x² less the square of the fit of x, and a "
-                f"quantile has no one-pass fit. Leave out bias or quantile, or give buckets."
+                f"quantile has no one-pass fit. Leave out bias or quantile, or give bins."
             )
         params["harmonics"] = int(harmonics)
     if stat not in PROFILE_STATS:
@@ -1361,7 +1361,7 @@ def seasonal_decomposition(
     iterate: Any,
     season: Any,
     component: Any,
-    window: Any,
+    window_rows: Any,
     lag: Any,
     closed: Any,
     trend: Any,
@@ -1436,7 +1436,7 @@ def seasonal_decomposition(
     for key, value, least in (
         ("inner_iter", inner_iter, 1),
         ("outer_iter", outer_iter, 0),
-        ("window", window, 1),
+        ("window_rows", window_rows, 1),
         ("lag", lag, 0),
     ):
         if value is not None:
@@ -1485,25 +1485,25 @@ def seasonal_decomposition(
     return operator_column(["mstl" if mstl else "stl", tree, params])
 
 
-def _offset(who: str, value: Any) -> float | str:
-    """A profile's offset: any finite span, 0 or negative included, where
+def _origin(who: str, value: Any) -> float | str:
+    """A profile's origin: any finite span, 0 or negative included, where
     every other span is above 0."""
     if isinstance(value, numbers.Real) and not isinstance(value, bool):
         if not math.isfinite(value):
             raise ValueError(
-                f"{who}: offset must be finite, but it is {value!r}. Set offset to where the "
+                f"{who}: origin must be finite, but it is {value!r}. Set origin to where the "
                 f'period starts after its default start, such as "9h30m".'
             )
         return float(value)
     if isinstance(value, (str, timedelta)) and not isinstance(value, bool):
         if isinstance(value, timedelta) and value <= timedelta(0):
             raise ValueError(
-                f"{who}: offset must be above 0 as a duration, but it is {value!r}. Give it as "
+                f"{who}: origin must be above 0 as a duration, but it is {value!r}. Give it as "
                 f'a positive duration within the period, such as "9h30m".'
             )
-        return _span(who, "offset", value, inf_ok=False)
+        return _span(who, "origin", value, inf_ok=False)
     raise TypeError(
-        f"{who}: offset must be a number or a duration, but it is of type "
+        f"{who}: origin must be a number or a duration, but it is of type "
         f'{type(value).__name__}. Give it in clock units, or as a duration such as "9h30m".'
     )
 

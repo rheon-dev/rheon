@@ -105,7 +105,7 @@ class TestClassificationMetrics:
     def test_plain_column_exact_parity_with_sklearn_and_bins(self) -> None:
         df = _make_discrete_frame(7, n=500)
         res = rp.eval.classification_metrics(
-            df, pred="p", target="y", weight="w", n_bins=10, min_samples=1
+            df, pred="p", target="y", weight="w", bins=10, min_samples=1
         )
         assert res.columns == [
             "n",
@@ -148,7 +148,7 @@ class TestClassificationMetrics:
         np.testing.assert_allclose(row["ece"], want_ece, atol=1e-14)
         np.testing.assert_allclose(row["mce"], want_mce, atol=1e-14)
 
-        bins_df = rp.eval.reliability_bins(df, pred="p", target="y", weight="w", n_bins=10)
+        bins_df = rp.eval.reliability_bins(df, pred="p", target="y", weight="w", bins=10)
         assert bins_df.height == 10
         assert bins_df.columns == [
             "bin",
@@ -215,8 +215,8 @@ class TestClassificationMetrics:
             assert all(0.5 < v <= 1.0 for v in by_dict["roc_auc"].to_list())
             assert all(0.0 <= v <= 1.0 for v in by_dict["ece"].to_list())
 
-            b_dict = rp.eval.reliability_bins(out, spec, group="g", n_bins=5)
-            b_name = rp.eval.reliability_bins(out, spec["name"], group="g", n_bins=5)
+            b_dict = rp.eval.reliability_bins(out, spec, group="g", bins=5)
+            b_name = rp.eval.reliability_bins(out, spec["name"], group="g", bins=5)
             assert b_dict.equals(b_name, null_equal=True)
             assert b_dict.height == 10
 
@@ -238,7 +238,7 @@ class TestClassificationMetrics:
         )
         assert got.height == 6
         assert got.columns[:2] == ["g1", "g2"]
-        bins = rp.eval.reliability_bins(df, pred="p", target="y", group=["g1", "g2"], n_bins=4)
+        bins = rp.eval.reliability_bins(df, pred="p", target="y", group=["g1", "g2"], bins=4)
         assert bins.height == 24
 
     def test_rule_9_zero_weight_rows_are_completely_ignored(self) -> None:
@@ -266,10 +266,10 @@ class TestClassificationMetrics:
         assert cm_mixed["g"].to_list() == ["A"]
 
         rb_clean = rp.eval.reliability_bins(
-            clean, pred="p", target="y", group="g", weight="w", n_bins=10
+            clean, pred="p", target="y", group="g", weight="w", bins=10
         )
         rb_mixed = rp.eval.reliability_bins(
-            mixed, pred="p", target="y", group="g", weight="w", n_bins=10
+            mixed, pred="p", target="y", group="g", weight="w", bins=10
         )
         assert rb_clean.equals(rb_mixed, null_equal=True)
 
@@ -305,13 +305,13 @@ class TestClassificationMetrics:
             assert np.array_equal(a, c), f"LazyFrame bit mismatch on {col}"
 
         rb_1 = rp.eval.reliability_bins(
-            df, pred="p", target="y", group="g", weight="w", n_bins=10, chunk_size=4_000
+            df, pred="p", target="y", group="g", weight="w", bins=10, chunk_size=4_000
         )
         rb_100 = rp.eval.reliability_bins(
-            df, pred="p", target="y", group="g", weight="w", n_bins=10, chunk_size=40
+            df, pred="p", target="y", group="g", weight="w", bins=10, chunk_size=40
         )
         rb_lazy_100 = rp.eval.reliability_bins(
-            lf, pred="p", target="y", group="g", weight="w", n_bins=10, chunk_size=40
+            lf, pred="p", target="y", group="g", weight="w", bins=10, chunk_size=40
         )
         assert rb_1.equals(rb_100, null_equal=True)
         assert rb_1.equals(rb_lazy_100, null_equal=True)
@@ -322,7 +322,7 @@ class TestClassificationMetrics:
         cm_e = rp.eval.classification_metrics(empty, pred="p", target="y", group="g")
         assert cm_e.height == 0
         assert cm_e.schema["roc_auc"] == pl.Float64
-        rb_e = rp.eval.reliability_bins(empty, pred="p", target="y", group="g", n_bins=5)
+        rb_e = rp.eval.reliability_bins(empty, pred="p", target="y", group="g", bins=5)
         assert rb_e.height == 0
         assert rb_e.schema["bin"] == pl.Int64
 
@@ -387,10 +387,10 @@ class TestClassificationMetrics:
             )
 
         # Parameter bounds and types.
-        with pytest.raises(ValueError, match="n_bins"):
-            rp.eval.classification_metrics(df, pred="p", target="y", n_bins=0)
-        with pytest.raises(rheon.WrongTypeError, match="n_bins"):
-            rp.eval.classification_metrics(df, pred="p", target="y", n_bins=True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="bins"):
+            rp.eval.classification_metrics(df, pred="p", target="y", bins=0)
+        with pytest.raises(rheon.WrongTypeError, match="bins"):
+            rp.eval.classification_metrics(df, pred="p", target="y", bins=True)  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="compression"):
             rp.eval.classification_metrics(df, pred="p", target="y", compression=5.0)
         with pytest.raises(ValueError, match="max_state_bytes"):
@@ -407,8 +407,8 @@ class TestClassificationMetrics:
             rp.eval.classification_metrics(df, spec_name="m")  # type: ignore[call-arg]
 
         # LazyFrame refuses bad arguments BEFORE execution.
-        with pytest.raises(ValueError, match="n_bins"):
-            rp.eval.reliability_bins(df.lazy(), pred="p", target="y", n_bins=0)
+        with pytest.raises(ValueError, match="bins"):
+            rp.eval.reliability_bins(df.lazy(), pred="p", target="y", bins=0)
         with pytest.raises(rheon.ColumnNotFoundError):
             rp.eval.classification_metrics(df.lazy(), pred="nope", target="y")
 
@@ -423,7 +423,7 @@ def _discrete_guard_outputs() -> list[dict[str, Any]]:
     for seed in range(5):
         df = _make_discrete_frame(seed, n=400)
         res = rp.eval.classification_metrics(
-            df, pred="p", target="y", weight="w", n_bins=10, min_samples=1
+            df, pred="p", target="y", weight="w", bins=10, min_samples=1
         )
         out.append(res.row(0, named=True))
     return out
@@ -439,7 +439,7 @@ def _continuous_guard_outputs() -> list[dict[str, Any]]:
                 pred="p",
                 target="y",
                 weight="w",
-                n_bins=10,
+                bins=10,
                 compression=200.0,
                 chunk_size=1_000,
                 min_samples=1,
@@ -473,7 +473,7 @@ def test_fifty_seeds_discrete_exact_vs_sklearn() -> None:
     for seed in range(50):
         df = _make_discrete_frame(seed, n=400)
         got = rp.eval.classification_metrics(
-            df, pred="p", target="y", weight="w", n_bins=10, min_samples=1
+            df, pred="p", target="y", weight="w", bins=10, min_samples=1
         ).row(0, named=True)
         p = df["p"].to_numpy()
         y = df["y"].to_numpy()
@@ -521,7 +521,7 @@ def test_fifty_seeds_continuous_10k_stream_vs_sklearn() -> None:
                 pred="p",
                 target="y",
                 weight="w",
-                n_bins=10,
+                bins=10,
                 compression=200.0,
                 chunk_size=1_000,
                 min_samples=1,

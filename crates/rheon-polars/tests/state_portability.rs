@@ -110,7 +110,7 @@ const SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "ewm_moments",
-        r#"{"type": "ewm_moments", "terms": {"skew": {"x0": 3}, "ac": {"x0": 1, "x0@2": 1}, "co": {"x0": 1, "x1": 2}}, "kind": {"skew": "standardized", "ac": "standardized"}, "se": true, "window_size": 40.0}"#,
+        r#"{"type": "ewm_moments", "terms": {"skew": {"x0": 3}, "ac": {"x0": 1, "x0@2": 1}, "co": {"x0": 1, "x1": 2}}, "kind": {"skew": "standardized", "ac": "standardized"}, "emit_se": true, "window_size": 40.0}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 50.0, "gap_cap": 50.0"#,
     ),
     (
@@ -185,7 +185,7 @@ const SPECS: &[(&str, &str, &str)] = &[
     ),
     (
         "realized",
-        r#"{"type": "realized", "window_rows": 30, "lm_window": 20}"#,
+        r#"{"type": "realized", "window_rows": 30, "lm_window_rows": 20}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
     ),
     (

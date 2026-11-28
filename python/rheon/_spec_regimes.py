@@ -41,8 +41,8 @@ def hmm(
     smooth_lag: int | None = None,
     params: str | None = None,
     means_weight: float | None = None,
-    covars_prior: float | list[float] | None = None,
-    covars_weight: float | None = None,
+    covariance_prior: float | list[float] | None = None,
+    covariance_weight: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian hidden Markov model of the features, filtered one row at a time.
@@ -97,7 +97,7 @@ def hmm(
         Prior weight in rows on given ``means`` (finite and at least 0,
         default 1.0). Requires given ``means`` and ``covs`` with means
         learning enabled.
-    ``covars_prior``, ``covars_weight``
+    ``covariance_prior``, ``covariance_weight``
         Conjugate covariance prior and its weight in rows (matching
         ``hmmlearn``'s Gaussian M-step at ``half_life = float("inf")``).
         Mutually exclusive with ``prior_rows`` and requires covariance
@@ -520,8 +520,8 @@ def hmm(
         ("smooth_lag", smooth_lag),
         ("params", params),
         ("means_weight", means_weight),
-        ("covars_prior", covars_prior),
-        ("covars_weight", covars_weight),
+        ("covariance_prior", covariance_prior),
+        ("covariance_weight", covariance_weight),
     ):
         if val is not None:
             model[key] = val

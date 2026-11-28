@@ -181,7 +181,7 @@ fn robust_cfg(loss: RobustLoss, standardize: bool) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -1018,8 +1018,8 @@ fn realized_golden() {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: Some(10),
-        lm_beta: 0.99,
+        lm_window_rows: Some(10),
+        lm_confidence: 0.99,
         max_state_bytes: None,
     };
     let got = all(&mut Realized::new(cfg.clone()).unwrap());
@@ -1027,7 +1027,7 @@ fn realized_golden() {
     let got = all(&mut Realized::new(RealizedCfg {
         decay: Decay::Halflife(f64::INFINITY),
         window_rows: Some(12),
-        lm_window: None,
+        lm_window_rows: None,
         ..cfg
     })
     .unwrap());
@@ -1215,6 +1215,7 @@ fn spectral_rows(decay: Decay) -> Vec<f64> {
         frequencies: vec![0.0, 0.1, 0.5],
         spacing: 1.0,
         decay,
+        method: rheon_core::SpectralMethod::Dft,
         scaling: SpectralScaling::Density,
         detrend: true,
         min_weight: 0.0,
@@ -1490,7 +1491,7 @@ fn hoeffding_tree_regressor_golden() {
         tau: 0.05,
         radius: 0.25,
         max_slots: 32,
-        min_samples_split: 5.0,
+        min_child_weight: 5.0,
         merit_preprune: true,
         max_depth: None,
         min_weight: 0.0,
@@ -2999,7 +3000,7 @@ fn ewm_moments_golden() {
     ];
     let mut cfg = EwmMomentsCfg::new(Decay::Halflife(80.0), terms);
     cfg.clocked = true;
-    cfg.se = true;
+    cfg.emit_se = true;
     for (name, window, want) in [
         ("ewm_moments", None, GOLDEN_EWM_MOMENTS),
         ("ewm_moments_window", Some(40.0), GOLDEN_EWM_MOMENTS_WINDOW),
@@ -5565,7 +5566,7 @@ fn moments_and_variations_below_the_bound_did_not_move() {
         ),
     ];
     let mut ewm = EwmMomentsCfg::new(lam, terms);
-    ewm.se = true;
+    ewm.emit_se = true;
     let ewm_forms = [
         ewm.clone(),
         EwmMomentsCfg {
@@ -5597,8 +5598,8 @@ fn moments_and_variations_below_the_bound_did_not_move() {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: Some(30),
-        lm_beta: 0.99,
+        lm_window_rows: Some(30),
+        lm_confidence: 0.99,
         max_state_bytes: None,
     };
     let realized_forms = [
@@ -5611,7 +5612,7 @@ fn moments_and_variations_below_the_bound_did_not_move() {
         RealizedCfg {
             decay: Decay::Halflife(f64::INFINITY),
             window_clock: Some(40.5),
-            lm_window: None,
+            lm_window_rows: None,
             ..realized
         },
     ];
@@ -5682,13 +5683,16 @@ fn moments_and_variations_below_the_bound_did_not_move() {
         }
         got.push(h.0);
     }
+    // Named-msgpack state digests for ewm_moments (first 3) and realized
+    // (next 3) reflect renamed config fields (`emit_se`, `lm_window_rows`,
+    // `lm_confidence`); power_variation (last 3) is unchanged.
     let want: [u64; 9] = [
-        0x62f0_eab2_5bab_1187,
-        0x0f93_9c18_e254_b24a,
-        0xe08f_e403_c71f_2c53,
-        0xac68_c577_5987_60f7,
-        0xef03_3e6a_44a7_624d,
-        0x3844_21b3_8431_d32c,
+        0x0c4f_7464_eb0a_00e3,
+        0x44d3_ac4b_e432_812e,
+        0x2bcf_daf7_c7c3_a467,
+        0x39eb_6f6e_f795_284d,
+        0x8c6f_22d7_56da_07f1,
+        0xd4fc_abed_5db5_b2b6,
         0x6429_c0a1_3949_df3a,
         0xeffe_4f4a_b3e4_ecbc,
         0x4690_528a_0a6d_8c28,

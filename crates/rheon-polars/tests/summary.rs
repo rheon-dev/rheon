@@ -1115,7 +1115,7 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
         // Lee and Mykland's ring part full when the file is saved.
         (
             "realized",
-            r#"{"type": "realized", "lm_window": 600}"#,
+            r#"{"type": "realized", "lm_window_rows": 600}"#,
             r#"["y"]"#,
             "[]",
             true,
@@ -1172,7 +1172,7 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
         // A lag's buffer and the standard errors' moments in the file.
         (
             "ewm_moments",
-            r#"{"type": "ewm_moments", "se": true, "kind": {"rho1": "standardized"},
+            r#"{"type": "ewm_moments", "emit_se": true, "kind": {"rho1": "standardized"},
                 "terms": {"m3": {"x0": 3}, "rho1": {"x0": 1, "x1@1": 1}}}"#,
             "[]",
             r#"["x0", "x1"]"#,

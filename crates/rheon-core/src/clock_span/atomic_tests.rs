@@ -28,7 +28,7 @@ use crate::hawkes::{Hawkes, HawkesCfg};
 use crate::hmm::{Hmm, HmmCfg, HmmCovariance};
 use crate::isotonic::{Isotonic, IsotonicCfg, OutOfBounds};
 use crate::power_variation::{PowerVariation, PowerVariationCfg, PvTerm, PvTermKind};
-use crate::realized::{DEFAULT_LM_BETA, Realized, RealizedCfg};
+use crate::realized::{DEFAULT_LM_CONFIDENCE, Realized, RealizedCfg};
 use crate::robust::{HuberScale, Robust, RobustCfg, RobustLoss};
 use crate::sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 use crate::{Decay, OnlineModel, Stamp, Step, WindowClosed};
@@ -520,7 +520,7 @@ fn robust_refit_span_is_atomic() {
             min_weight_holds_learning: false,
             refit_clock: Some(1e9),
             max_state_bytes: None,
-            huber_norm: crate::HuberNorm::Huber,
+            norm: crate::HuberNorm::Huber,
         };
         let row = 8 * (2 + 4) as u64 + extra;
         let stamps = (2 * std::mem::size_of::<Option<Stamp>>()) as u64;
@@ -1094,7 +1094,7 @@ fn ewm_moments_clock_span_is_atomic() {
         max_state_bytes: None,
         clocked: true,
         lag_tolerance: None,
-        se: false,
+        emit_se: false,
         window_rows: None,
         window_clock: None,
     };
@@ -1135,7 +1135,7 @@ fn ewm_moments_clock_span_is_atomic() {
         max_state_bytes: None,
         clocked: true,
         lag_tolerance: None,
-        se: false,
+        emit_se: false,
         window_rows: None,
         window_clock: Some(100.0),
     };
@@ -1546,8 +1546,8 @@ fn realized_window_clock_is_atomic() {
         window_rows: None,
         window_clock: Some(10.0),
         closed: WindowClosed::Right,
-        lm_window: None,
-        lm_beta: DEFAULT_LM_BETA,
+        lm_window_rows: None,
+        lm_confidence: DEFAULT_LM_CONFIDENCE,
         max_state_bytes: None,
     };
     let cap = Realized::state_bytes(2, None, Some(4), true);

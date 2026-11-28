@@ -42,7 +42,7 @@ _SKIPPED_WHEN_ABSENT["hoeffding_tree_regressor"] = frozenset(
         "tau",
         "radius",
         "max_slots",
-        "min_samples_split",
+        "min_child_weight",
         "merit_preprune",
         "max_depth",
         "max_state_bytes",
@@ -284,7 +284,7 @@ def hoeffding_tree_regressor(
     tau: float = 0.05,
     radius: float = 0.25,
     max_slots: int = 32,
-    min_samples_split: float = 5.0,
+    min_child_weight: float = 5.0,
     merit_preprune: bool = True,
     max_depth: int | None = None,
     **common: Unpack[CommonKwargs],
@@ -308,7 +308,7 @@ def hoeffding_tree_regressor(
     ``min_settled_frac`` applies: Hoeffding-bound splits accumulate leaf
     statistics without exponential decay or hard windows. Row weights are
     frequency weights (an observation of weight ``w`` counts as ``w``
-    observations toward ``grace_period``, ``min_samples_split`` and the
+    observations toward ``grace_period``, ``min_child_weight`` and the
     Hoeffding bound). A row of weight 0 is scored without updating any
     tree or counter, and a null target skips learning on that target alone.
     Linear-only readings (``max_error_inflation``, ``emit_error_inflation``,
@@ -333,7 +333,7 @@ def hoeffding_tree_regressor(
         Maximum number of quantization buckets retained per feature per
         active leaf (at least 2). Once full, new observations merge into
         the nearest existing bucket. Default ``32``.
-    ``min_samples_split``
+    ``min_child_weight``
         Minimum weight required on each side of a candidate split (finite
         and above 0). Default ``5.0``.
     ``merit_preprune``
@@ -444,7 +444,7 @@ def hoeffding_tree_regressor(
         "tau": None if tau == 0.05 else tau,
         "radius": None if radius == 0.25 else radius,
         "max_slots": None if max_slots == 32 else max_slots,
-        "min_samples_split": None if min_samples_split == 5.0 else min_samples_split,
+        "min_child_weight": None if min_child_weight == 5.0 else min_child_weight,
         "merit_preprune": None if merit_preprune else False,
         "max_depth": max_depth,
     }

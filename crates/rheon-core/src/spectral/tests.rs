@@ -31,6 +31,7 @@ fn cfg(freqs: Vec<f64>, decay: Decay) -> SpectralCfg {
         frequencies: freqs,
         spacing: 1.0,
         decay,
+        method: SpectralMethod::Dft,
         scaling: SpectralScaling::Density,
         detrend: true,
         min_weight: 0.0,
@@ -76,7 +77,6 @@ fn longhand(
     match scaling {
         SpectralScaling::Density => c * (re * re + im * im) * spacing / saa,
         SpectralScaling::Spectrum => c * (re * re + im * im) / (sa * sa),
-        SpectralScaling::LombScargle => unreachable!("written out in ls_longhand"),
     }
 }
 
@@ -348,7 +348,7 @@ fn lomb_scargle_is_the_weighted_least_squares_of_a_sinusoid() {
     for h in [f64::INFINITY, 200.0] {
         for detrend in [true, false] {
             let mut m = Spectral::new(SpectralCfg {
-                scaling: SpectralScaling::LombScargle,
+                method: SpectralMethod::LombScargle,
                 detrend,
                 ..cfg(freqs.clone(), Decay::Halflife(h))
             })
@@ -381,7 +381,7 @@ fn lomb_scargle_is_the_weighted_least_squares_of_a_sinusoid() {
 fn lomb_scargle_withholds_an_undetermined_fit() {
     let ls = |detrend| {
         Spectral::new(SpectralCfg {
-            scaling: SpectralScaling::LombScargle,
+            method: SpectralMethod::LombScargle,
             detrend,
             ..cfg(vec![0.1], Decay::Halflife(f64::INFINITY))
         })
@@ -413,7 +413,7 @@ fn lomb_scargle_withholds_an_undetermined_fit() {
 #[test]
 fn lomb_scargle_settings_and_state() {
     let c = SpectralCfg {
-        scaling: SpectralScaling::LombScargle,
+        method: SpectralMethod::LombScargle,
         ..cfg(vec![0.1, 3.0], Decay::Halflife(40.0))
     };
     let mut m = Spectral::new(c.clone()).unwrap();
@@ -441,8 +441,15 @@ fn lomb_scargle_settings_and_state() {
 }
 
 /// A spectrum over a hard window of `w` clock units, a snapshot every row.
-fn windowed(freqs: Vec<f64>, h: f64, w: f64, scaling: SpectralScaling) -> Spectral {
+fn windowed(
+    freqs: Vec<f64>,
+    h: f64,
+    w: f64,
+    method: SpectralMethod,
+    scaling: SpectralScaling,
+) -> Spectral {
     Spectral::new(SpectralCfg {
+        method,
         scaling,
         window: Some(w),
         ..cfg(freqs, Decay::Halflife(h))
@@ -478,12 +485,12 @@ fn a_window_is_the_definition_over_its_rows() {
     let freqs = vec![0.05, 0.125, 1.0 / 3.2, 0.4];
     let w = 150.0;
     for h in [f64::INFINITY, 90.0] {
-        for scaling in [
-            SpectralScaling::Density,
-            SpectralScaling::Spectrum,
-            SpectralScaling::LombScargle,
+        for (method, scaling) in [
+            (SpectralMethod::Dft, SpectralScaling::Density),
+            (SpectralMethod::Dft, SpectralScaling::Spectrum),
+            (SpectralMethod::LombScargle, SpectralScaling::Density),
         ] {
-            let mut m = windowed(freqs.clone(), h, w, scaling);
+            let mut m = windowed(freqs.clone(), h, w, method, scaling);
             for i in 0..n {
                 m.step(&[], &[Some(x[i])], steps[i], wts[i]);
                 if !matches!(i, 120 | 1777 | 2999) {
@@ -494,8 +501,8 @@ fn a_window_is_the_definition_over_its_rows() {
                 let r = from..i + 1;
                 let got = &m.powers()[0];
                 for (k, f) in freqs.iter().enumerate() {
-                    let want = match scaling {
-                        SpectralScaling::LombScargle => ls_longhand(
+                    let want = match method {
+                        SpectralMethod::LombScargle => ls_longhand(
                             *f,
                             &x[r.clone()],
                             &tau[r.clone()],
@@ -503,7 +510,7 @@ fn a_window_is_the_definition_over_its_rows() {
                             h,
                             true,
                         ),
-                        _ => longhand(
+                        SpectralMethod::Dft => longhand(
                             *f,
                             &x[r.clone()],
                             &tau[r.clone()],
@@ -516,7 +523,7 @@ fn a_window_is_the_definition_over_its_rows() {
                     };
                     assert!(
                         (got[k] - want).abs() <= 1e-9 * want.abs().max(1e-6),
-                        "h {h}, {scaling:?}, row {i}, f {f}: {} vs {want}",
+                        "h {h}, {method:?} {scaling:?}, row {i}, f {f}: {} vs {want}",
                         got[k]
                     );
                 }
@@ -575,6 +582,7 @@ fn a_break_under_a_window_starts_the_transform_again() {
         vec![0.125, 0.25],
         f64::INFINITY,
         60.0,
+        SpectralMethod::Dft,
         SpectralScaling::Spectrum,
     );
     for v in &x[..200] {
@@ -625,7 +633,13 @@ fn a_window_holds_its_digits_over_ten_million_rows() {
     let freqs = [0.01, 0.125, 0.4];
     let mut worst = 0.0_f64;
     for origin in [0.0, 2f64.powi(40)] {
-        let mut m = windowed(freqs.to_vec(), f64::INFINITY, w, SpectralScaling::Spectrum);
+        let mut m = windowed(
+            freqs.to_vec(),
+            f64::INFINITY,
+            w,
+            SpectralMethod::Dft,
+            SpectralScaling::Spectrum,
+        );
         let mut s = 61;
         let (mut t, mut tail) = (origin, std::collections::VecDeque::new());
         for i in 0..n {
@@ -679,6 +693,7 @@ fn a_thinned_window_is_the_definition_over_the_rows_it_holds() {
         vec![0.125, 0.3],
         f64::INFINITY,
         200.0,
+        SpectralMethod::Dft,
         SpectralScaling::Spectrum,
     );
     m.set_window_budget(Some(crate::WindowBudget::Thin(0.01)));
@@ -726,6 +741,7 @@ fn power_at_the_input_bound_scales_before_squaring_and_never_emits_inf() {
         frequencies: vec![0.0, 0.2, 0.5],
         spacing: 1.0,
         decay: Decay::Halflife(20.0),
+        method: SpectralMethod::Dft,
         scaling: SpectralScaling::Density,
         detrend: true,
         min_weight: 0.0,
@@ -734,14 +750,15 @@ fn power_at_the_input_bound_scales_before_squaring_and_never_emits_inf() {
         window_every: None,
         max_rows_between_snapshots: None,
     };
-    for scaling in [
-        SpectralScaling::Density,
-        SpectralScaling::Spectrum,
-        SpectralScaling::LombScargle,
+    for (method, scaling) in [
+        (SpectralMethod::Dft, SpectralScaling::Density),
+        (SpectralMethod::Dft, SpectralScaling::Spectrum),
+        (SpectralMethod::LombScargle, SpectralScaling::Density),
     ] {
         let mut c = base.clone();
+        c.method = method;
         c.scaling = scaling;
-        if scaling == SpectralScaling::LombScargle {
+        if method == SpectralMethod::LombScargle {
             c.frequencies = vec![0.1, 0.2, 0.5];
         }
         let mut m = Spectral::new(c).unwrap();
@@ -751,17 +768,17 @@ fn power_at_the_input_bound_scales_before_squaring_and_never_emits_inf() {
         for (row, s) in [(0, &s0), (1, &s1), (2, &s2)] {
             assert!(
                 s.pred.iter().all(|v| !v.is_infinite()),
-                "{scaling:?} row {row}: {:?}",
+                "{method:?} {scaling:?} row {row}: {:?}",
                 s.pred
             );
         }
         // Single detrended point: mean equals the point itself, so power is 0
         // (up to floating-point rounding of `s.x - m * s.u` at `1e200`, which
         // stays finite rather than overflowing to `+inf`).
-        if scaling != SpectralScaling::LombScargle {
+        if method != SpectralMethod::LombScargle {
             assert!(
                 s2.pred[3..6].iter().all(|v| v.is_finite()),
-                "{scaling:?}: {:?}",
+                "{method:?} {scaling:?}: {:?}",
                 &s2.pred[3..6]
             );
         }

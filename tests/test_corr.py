@@ -608,11 +608,11 @@ def test_epps_invert_recovers_a_lagged_pair():
     g = bank.gram("c")[0]
     plain = rp.gram.correlation(g)[0, 1]
     assert abs(plain) < 0.1, "attenuated to nothing at scale 1"
-    got = corr.epps_invert(g, L=L)
+    got = corr.epps_invert(g, lags=L)
     assert got[0, 1] > 0.7, got[0, 1]
     assert np.allclose(np.diag(got), 1.0)
-    # `L = 1` is the plain correlation.
-    assert corr.epps_invert(g, L=1)[0, 1] == pytest.approx(plain, rel=1e-12)
+    # `lags = 1` is the plain correlation.
+    assert corr.epps_invert(g, lags=1)[0, 1] == pytest.approx(plain, rel=1e-12)
 
 
 def test_epps_invert_has_no_correlation_where_a_long_run_variance_is_not_above_zero():
@@ -637,7 +637,7 @@ def test_epps_invert_has_no_correlation_where_a_long_run_variance_is_not_above_z
             lag[a, b] = (-1.5 if i < 2 and j < 2 else 0.25) * c0[a, b]
     g["lags"] = [1]
     g["lag_comoments"] = [lag]
-    got = corr.epps_invert(g, L=2)
+    got = corr.epps_invert(g, lags=2)
     assert np.isnan(got[:2, :]).all() and np.isnan(got[:, :2]).all(), got
     assert got[2, 2] == 1.0
 
@@ -654,8 +654,8 @@ def test_epps_invert_reads_every_form_of_a_gram(dtype, layout):
     spec = rp.spec.ew_cov("c", features=["x0", "x1", "x2"], lam=1.0, lags=[1, 2])
     bank = rp.ModelBank([spec])
     bank.fit_predict(df)
-    want = corr.epps_invert(bank.gram("c")[0], L=3)
-    got = corr.epps_invert(bank.gram("c", dtype=dtype, layout=layout)[0], L=3)
+    want = corr.epps_invert(bank.gram("c")[0], lags=3)
+    got = corr.epps_invert(bank.gram("c", dtype=dtype, layout=layout)[0], lags=3)
     assert got.shape == (3, 3)
     tol = 1e-15 if dtype == "float64" else 1e-6
     assert np.abs(got - want).max() <= tol
@@ -670,9 +670,9 @@ def test_epps_invert_at_l_one_is_the_plain_correlation():
     bank = rp.ModelBank([spec])
     bank.fit_predict(df)
     g = bank.gram("c")[0]
-    assert np.allclose(corr.epps_invert(g, L=1), rp.gram.correlation(g))
-    with pytest.raises(ValueError, match="L must be at least 1"):
-        corr.epps_invert(g, L=0)
+    assert np.allclose(corr.epps_invert(g, lags=1), rp.gram.correlation(g))
+    with pytest.raises(ValueError, match="lags must be at least 1"):
+        corr.epps_invert(g, lags=0)
 
 
 def test_mp_edges_at_and_below_the_square_case():
@@ -692,9 +692,9 @@ def test_epps_invert_names_a_missing_lag():
     )
     bank.fit_predict(df)
     with pytest.raises(ValueError, match="lag 2 is not in the input"):
-        corr.epps_invert(bank.gram("c")[0], L=4)
-    with pytest.raises(ValueError, match="L must be at least 1"):
-        corr.epps_invert(bank.gram("c")[0], L=0)
+        corr.epps_invert(bank.gram("c")[0], lags=4)
+    with pytest.raises(ValueError, match="lags must be at least 1"):
+        corr.epps_invert(bank.gram("c")[0], lags=0)
 
 
 # --- standard errors ------------------------------------------------------

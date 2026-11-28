@@ -308,7 +308,7 @@ pub struct Checks {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub influence_w: Vec<Influence>,
     /// Each feature's rolling window for two-sample KS feature health, under
-    /// `feature_ks_window` / `feature_ks_recent`: one per instance, not per slot.
+    /// `feature_ks_window_rows` / `feature_ks_recent_rows`: one per instance, not per slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_ks: Option<FeatureHealthKs>,
 }
@@ -394,8 +394,8 @@ impl Checks {
                 on(spec.emit_cooks_distance || spec.emit_dfbetas, n_slots)
             ],
             health_ks: spec
-                .feature_ks_window
-                .zip(spec.feature_ks_recent)
+                .feature_ks_window_rows
+                .zip(spec.feature_ks_recent_rows)
                 .map(|(w, r)| FeatureHealthKs::new(spec.k(), w, r)),
         }
     }
@@ -459,8 +459,8 @@ impl Checks {
             && self.influence_w.iter().all(Influence::has_shape)
             && self.health_ks.is_some() == fresh.health_ks.is_some()
             && self.health_ks.as_ref().is_none_or(|h| {
-                spec.feature_ks_window
-                    .zip(spec.feature_ks_recent)
+                spec.feature_ks_window_rows
+                    .zip(spec.feature_ks_recent_rows)
                     .is_some_and(|(w, r)| h.has_shape(k, w, r))
             })
             && self.specification.iter().all(|s| {
@@ -769,7 +769,7 @@ impl Checks {
     }
 
     /// Write each feature's two-sample KS statistic and p-value before the row,
-    /// under `feature_ks_window` / `feature_ks_recent`: `ks_stat` at `(i·n_rows
+    /// under `feature_ks_window_rows` / `feature_ks_recent_rows`: `ks_stat` at `(i·n_rows
     /// + ri)` of `out`, `ks_p` `k` blocks on.
     pub fn read_health_ks(&mut self, k: usize, n_rows: usize, ri: usize, out: &mut [f64]) {
         let Some(h) = self.health_ks.as_mut() else {

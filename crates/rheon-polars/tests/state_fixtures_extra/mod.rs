@@ -576,7 +576,7 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         // Windows state 14 (PLAN 490): the STL operators and each form a
         // group's ring takes at the save.
         ("with_windows_stl", "an STL operator's window", |p, v| {
-            p.contains(".seasonals.") && p.ends_with(".window") && v.as_u64() == Some(6)
+            p.contains(".seasonals.") && p.ends_with(".window_rows") && v.as_u64() == Some(6)
         }),
         ("with_windows_stl", "a full ring", |p, v| {
             p.contains(".seasonal.") && p.ends_with(".count") && v.as_u64() == Some(6)

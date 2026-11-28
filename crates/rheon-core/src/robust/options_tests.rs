@@ -38,7 +38,7 @@ fn huber(k: usize, m: usize) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: crate::HuberNorm::Huber,
+        norm: crate::HuberNorm::Huber,
     }
 }
 

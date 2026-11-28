@@ -59,7 +59,7 @@ pub struct StlDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outer_iter: Option<u32>,
     /// The window `W`, resolved: the embargo's `2 h + 1` when not given.
-    pub window: u32,
+    pub window_rows: u32,
     /// The lag, resolved: `h`, plus 1 under `"left"`, when not given.
     pub lag: u32,
     pub closed: RingClosed,
@@ -119,7 +119,7 @@ impl StlDef {
     pub fn operator(&self) -> Result<StlOperator, String> {
         StlOperator::new(
             self.decomposition()?,
-            Some(self.window as usize),
+            Some(self.window_rows as usize),
             Some(self.lag as usize),
             self.closed,
         )
@@ -127,7 +127,7 @@ impl StlDef {
 
     /// The bytes one group's ring holds: `8 W + 24`.
     pub fn bytes(&self) -> u64 {
-        rheon_core::state_bytes(self.window as usize)
+        rheon_core::state_bytes(self.window_rows as usize)
     }
 
     /// Every setting checked, the component among the seasons, and the ring
@@ -147,7 +147,7 @@ impl StlDef {
                 self.seasons.len() - 1
             ));
         }
-        check_state_bytes(name, self.window as usize, self.cap)
+        check_state_bytes(name, self.window_rows as usize, self.cap)
     }
 }
 
@@ -161,7 +161,7 @@ pub(super) fn fits(defs: &[StlDef], states: &[SeasState]) -> bool {
             && states
                 .iter()
                 .zip(defs)
-                .all(|(s, d)| s.window().len() <= d.window as usize))
+                .all(|(s, d)| s.window().len() <= d.window_rows as usize))
 }
 
 /// Where the operators' outputs start among a row's.
@@ -186,7 +186,7 @@ pub(super) fn row(
         g.seasonal = out
             .defs
             .iter()
-            .map(|d| StlRing::new(d.window as usize))
+            .map(|d| StlRing::new(d.window_rows as usize))
             .collect();
     }
     for (j, (def, ring)) in out.defs.iter().zip(g.seasonal.iter_mut()).enumerate() {

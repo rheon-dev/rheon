@@ -197,7 +197,7 @@ pub struct HmmCfg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm_clock: Option<f64>,
     /// Optional extensions (`smooth_lag`, `max_state_bytes`, `params`,
-    /// `means_weight`, `covars_prior`, `covars_weight`), kept in one trailing
+    /// `means_weight`, `covariance_prior`, `covariance_weight`), kept in one trailing
     /// field so pre-existing states keep their exact bytes and compact
     /// msgpack stays positional-safe.
     #[serde(default)]
@@ -808,7 +808,7 @@ impl Hmm {
         cfg.validate()?;
         let (k, d) = (cfg.k, cfg.n_features);
         let eff = cfg.effective_params();
-        let conjugate = cfg.has_covars_prior() && eff.c;
+        let conjugate = cfg.has_covariance_prior() && eff.c;
         let means_weight = cfg.means_weight();
         // No window reads a run here, so none is kept (docs/PLAN.md task
         // 128; review 2026-09-26, C3).

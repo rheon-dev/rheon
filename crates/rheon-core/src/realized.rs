@@ -113,7 +113,7 @@
 //! ```
 //!
 //! `β` the test's confidence, `P(ξ ≤ β*) = β` for the standard Gumbel `ξ`
-//! (`lm_beta`, 0.99 by default, a test at 1%: `β* = 4.6001`). `n` is the
+//! (`lm_confidence`, 0.99 by default, a test at 1%: `β* = 4.6001`). `n` is the
 //! target's own count of returns, the `n` of the other estimators (above),
 //! so the threshold is that of the stretch they are measured over; the flag
 //! is `NaN` where `L_i` is, or where `n ≤ 1`, where `C_n` has no value (`ln
@@ -136,7 +136,7 @@
 //! and each target's own weight are then the weights inside the window
 //! (hard rule 8), and its `n` Kish's count of them.
 //!
-//! **`lm_window = K`**, Lee and Mykland's window, takes `σ_i` from the `K −
+//! **`lm_window_rows = K`**, Lee and Mykland's window, takes `σ_i` from the `K −
 //! 1` returns of the target before row `i` alone, their `K − 2` products,
 //! whatever the estimators' window or decay. It counts returns, as the
 //! paper's `K` does, so it has no form in clock units. Without it `σ_i` is
@@ -145,7 +145,7 @@
 //! **The state.** Per target, `18` numbers (seven compensated sums, the last
 //! return's size, the last two cube roots and how many returns are
 //! remembered) and the shared weight: `8 + 144 m` bytes for `m` targets
-//! under a decay, whatever the stream's length. `lm_window` adds `16 (K − 2)
+//! under a decay, whatever the stream's length. `lm_window_rows` adds `16 (K − 2)
 //! + 32` bytes a target. A window adds `32` bytes, and a row it holds `16`
 //! (its sequence and weight; under `window_clock` a stamp of 32 more) and `56`
 //! a target with a return there (its sequence, weight, four terms and how
@@ -191,10 +191,10 @@ pub const BNS_THETA: f64 = 0.608_993_753_862_133;
 pub const OUTPUTS_PER_TARGET: usize = 7;
 
 /// Lee and Mykland's confidence `β` where none is set.
-pub const DEFAULT_LM_BETA: f64 = 0.99;
+pub const DEFAULT_LM_CONFIDENCE: f64 = 0.99;
 
-fn default_lm_beta() -> f64 {
-    DEFAULT_LM_BETA
+fn default_lm_confidence() -> f64 {
+    DEFAULT_LM_CONFIDENCE
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,10 +223,10 @@ pub struct RealizedCfg {
     /// mean of `K − 2` products; before `K − 1` returns, the mean of those
     /// there are. Without it, from the estimators' sums.
     #[serde(default)]
-    pub lm_window: Option<usize>,
+    pub lm_window_rows: Option<usize>,
     /// The confidence `β` of Lee and Mykland's flag, above 0 and below 1.
-    #[serde(default = "default_lm_beta")]
-    pub lm_beta: f64,
+    #[serde(default = "default_lm_confidence")]
+    pub lm_confidence: f64,
     /// The bytes a group's state may hold, a window's rows included; the
     /// default is [`crate::clock_span::DEFAULT_STATE_BYTES`].
     #[serde(default)]
@@ -280,21 +280,21 @@ impl RealizedCfg {
                  window.",
             );
         }
-        if let Some(k) = self.lm_window
+        if let Some(k) = self.lm_window_rows
             && k < 3
         {
             no.refuse(format!(
-                "realized: lm_window must be at least 3, but it is {k}: Lee and Mykland's \
+                "realized: lm_window_rows must be at least 3, but it is {k}: Lee and Mykland's \
                  volatility is the mean of the K - 2 products of the K - 1 returns before a \
                  row. Give K of 3 or more, or leave it out to read it from the estimators."
             ));
         }
-        if !(self.lm_beta > 0.0 && self.lm_beta < 1.0) {
+        if !(self.lm_confidence > 0.0 && self.lm_confidence < 1.0) {
             no.refuse(format!(
-                "realized: lm_beta must be above 0 and below 1, but it is {}. Give the \
+                "realized: lm_confidence must be above 0 and below 1, but it is {}. Give the \
                  confidence of Lee and Mykland's test, such as 0.99, or leave it out for \
                  0.99.",
-                self.lm_beta
+                self.lm_confidence
             ));
         }
         match crate::clock_span::check_max_state_bytes("realized", self.max_state_bytes) {
@@ -314,7 +314,7 @@ impl RealizedCfg {
     /// largest window that fits where a window is what passes it.
     fn past_the_cap(&self, bytes: u64, cap: u64) -> String {
         let m = self.n_targets as u64;
-        let base = Realized::state_bytes(self.n_targets, self.lm_window, Some(0), false);
+        let base = Realized::state_bytes(self.n_targets, self.lm_window_rows, Some(0), false);
         let row = Realized::window_row_bytes(self.n_targets, false);
         match self.window_rows {
             Some(w) if base <= cap => format!(
@@ -330,13 +330,13 @@ impl RealizedCfg {
                  max_state_bytes.",
                 bytes / m.max(1),
                 crate::model::count(self.n_targets, "target"),
-                if self.lm_window.is_some() {
-                    ", lm_window's products included"
+                if self.lm_window_rows.is_some() {
+                    ", lm_window_rows's products included"
                 } else {
                     ""
                 },
-                if self.lm_window.is_some() {
-                    "lower lm_window, "
+                if self.lm_window_rows.is_some() {
+                    "lower lm_window_rows, "
                 } else {
                     ""
                 },
@@ -353,7 +353,7 @@ impl RealizedCfg {
     fn fixed_bytes(&self) -> u64 {
         Realized::state_bytes(
             self.n_targets,
-            self.lm_window,
+            self.lm_window_rows,
             self.window_rows.or(self.window_clock.map(|_| 0)),
             self.window_clock.is_some(),
         )
@@ -427,7 +427,7 @@ impl Realized {
     pub fn new(cfg: RealizedCfg) -> Result<Self, String> {
         cfg.validate()?;
         Ok(Self {
-            series: vec![Series::new(cfg.lm_window); cfg.n_targets],
+            series: vec![Series::new(cfg.lm_window_rows); cfg.n_targets],
             w_sum: 0.0,
             window: cfg
                 .windowed()
@@ -455,17 +455,17 @@ impl Realized {
     }
 
     /// The bytes of the numbers a model of `n_targets` series holds: `8 +
-    /// 144 m` under a decay; with `lm_window = K`, `16 (K − 2) + 32` more a
+    /// 144 m` under a decay; with `lm_window_rows = K`, `16 (K − 2) + 32` more a
     /// target; with a window holding `rows` rows, its fixed `32` and
     /// [`Self::window_row_bytes`] a row, every target's return there.
     pub fn state_bytes(
         n_targets: usize,
-        lm_window: Option<usize>,
+        lm_window_rows: Option<usize>,
         rows: Option<usize>,
         clocked: bool,
     ) -> u64 {
         let m = n_targets as u64;
-        let lm = lm_window.map_or(0, LmRing::bytes);
+        let lm = lm_window_rows.map_or(0, LmRing::bytes);
         8 + (Series::BYTES + lm) * m
             + rows.map_or(0, |r| {
                 32 + r as u64 * Self::window_row_bytes(n_targets, clocked)
@@ -494,7 +494,7 @@ impl Realized {
     fn bytes_with(&self, extra: usize) -> u64 {
         Self::state_bytes(
             self.cfg.n_targets,
-            self.cfg.lm_window,
+            self.cfg.lm_window_rows,
             self.window.as_ref().map(|w| w.rows.len() + extra),
             self.cfg.window_clock.is_some(),
         )
@@ -508,7 +508,7 @@ impl Realized {
             s.read(
                 y.get(j).copied().flatten(),
                 self.cfg.min_weight,
-                self.cfg.lm_beta,
+                self.cfg.lm_confidence,
                 pred,
             );
         }
@@ -606,7 +606,7 @@ impl OnlineModel for Realized {
                 _ => 0,
             };
             let rows = self.window.as_ref().map(|w| w.rows.len() - dropped + 1);
-            let bytes = Self::state_bytes(self.cfg.n_targets, self.cfg.lm_window, rows, true);
+            let bytes = Self::state_bytes(self.cfg.n_targets, self.cfg.lm_window_rows, rows, true);
             let cap = self.cfg.cap();
             if !self.held_cap().admit(bytes, cap) {
                 if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
@@ -647,10 +647,10 @@ impl OnlineModel for Realized {
             }
             None => None,
         };
-        let lm_window = self.cfg.lm_window;
+        let lm_window_rows = self.cfg.lm_window_rows;
         for (j, s) in self.series.iter_mut().enumerate() {
             if let Some(r) = y.get(j).copied().flatten() {
-                s.learn(r, weight, seq, lm_window);
+                s.learn(r, weight, seq, lm_window_rows);
             }
         }
         if let Some(cap) = self.cfg.window_rows {
@@ -716,7 +716,9 @@ impl OnlineModel for Realized {
                 crate::model::check_cfg("realized", m.cfg.validate())?;
                 let rows = m.window.as_ref().map(|w| &w.rows);
                 let shaped = m.series.len() == m.cfg.n_targets
-                    && m.series.iter().all(|s| s.has_shape(m.cfg.lm_window, rows))
+                    && m.series
+                        .iter()
+                        .all(|s| s.has_shape(m.cfg.lm_window_rows, rows))
                     && match (&m.window, m.cfg.windowed()) {
                         (None, false) => true,
                         (Some(w), true) => {

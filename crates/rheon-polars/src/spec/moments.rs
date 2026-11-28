@@ -239,7 +239,7 @@ pub fn ewm_moments_cfg(
         terms,
         kind,
         bias,
-        se,
+        emit_se,
         lag_tolerance,
         window_rows,
         window_size,
@@ -347,7 +347,7 @@ pub fn ewm_moments_cfg(
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
         clocked,
         lag_tolerance: lag_tolerance.as_ref().map(Span::value),
-        se: se.unwrap_or(false),
+        emit_se: emit_se.unwrap_or(false),
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
     })

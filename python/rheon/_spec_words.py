@@ -393,7 +393,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "huber_refit_span",
             "max_state_bytes",
             "refit_budget",
-            "huber_norm",
+            "norm",
         }
     ),
     "sgd": frozenset(
@@ -456,9 +456,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "dispersion",
             "filter",
             "ukf_rule",
-            "alpha",
-            "beta",
-            "kappa",
+            "ukf_alpha",
+            "ukf_beta",
+            "ukf_kappa",
             "ukf_noise",
             "coef_prior",
             "emit_loglik",
@@ -485,8 +485,8 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
             "params",
             "means_weight",
-            "covars_prior",
-            "covars_weight",
+            "covariance_prior",
+            "covariance_weight",
         }
     ),
     "bocpd": frozenset(
@@ -504,7 +504,14 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         {"permute_every", "window_size", "monitor_span", "max_state_bytes", "emit_n_flagged"}
     ),
     "realized": frozenset(
-        {"window_rows", "window_size", "closed", "lm_window", "lm_beta", "max_state_bytes"}
+        {
+            "window_rows",
+            "window_size",
+            "closed",
+            "lm_window_rows",
+            "lm_confidence",
+            "max_state_bytes",
+        }
     ),
     "power_variation": frozenset({"window_rows", "window_size", "closed", "max_state_bytes"}),
     "bandit": frozenset({"policy", "alpha", "epsilon", "l2", "seed", "max_state_bytes"}),

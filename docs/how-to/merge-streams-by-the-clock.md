@@ -33,7 +33,7 @@ memory it holds is one chunk of each stream, however long they are.
    streams in a `dict`, each under the name its rows will carry, or by
    position, named `"0"`, `"1"` and on. Given a query, it returns one, so
    the merge runs as the query streams.
-2. **Give `by` the column a bank downstream groups by, if it has one.**
+2. **Give `group` the column a bank downstream groups by, if it has one.**
    The merged rows of each group are then checked as that bank checks
    them, as [Check that it worked](#check-that-it-worked) says.
 3. **Read the merged stream.** Its columns are every stream's, matched by
@@ -68,7 +68,7 @@ pl.DataFrame({                                         # trades, in clock order
 
 # Merge them by the clock, the rows of each symbol checked together.
 streams = {"quotes": pl.scan_parquet("quotes.parquet"), "trades": pl.scan_parquet("trades.parquet")}
-merged = rp.stream.merge(streams, clock="ts", by="symbol")    # 1. and 2.: a query
+merged = rp.stream.merge(streams, clock="ts", group="symbol")    # 1. and 2.: a query
 # Read the merged stream.
 out = merged.collect()
 print(out.columns)                                             # 3.
@@ -100,7 +100,7 @@ value too old to trust is set aside.
 
 1. **Give `carry` the columns to fill forward.** On a row where such a
    column is null, the merge fills in its last value in the merged rows
-   before it, of the row's `by` group. A null in a stream is not a value,
+   before it, of the row's `group`. A null in a stream is not a value,
    so the last value before it is carried on, as Polars' `forward_fill`
    carries it. Before a group has had a value, the column stays null.
 2. **Read the age beside each carried column.** The column `<c>_age` is the
@@ -114,7 +114,7 @@ This code carries the bid of each symbol to its trades, and keeps it only
 where it is at most a second old:
 
 ```python
-carried = rp.stream.merge(streams, clock="ts", by="symbol", carry="bid")   # 1.
+carried = rp.stream.merge(streams, clock="ts", group="symbol", carry="bid")   # 1.
 trades = carried.filter(pl.col("source") == "trades").with_columns(
     pl.when(pl.col("bid_age") <= pl.duration(seconds=1))                   # 2. and 3.
     .then(pl.col("bid"))
@@ -163,8 +163,8 @@ the one above:
 cut = at(3)                                                    # 1. every stream cut at one clock
 first = {k: pl.scan_parquet(f"{k}.parquet").filter(pl.col("ts") <= cut) for k in streams}
 rest = {k: pl.scan_parquet(f"{k}.parquet").filter(pl.col("ts") > cut) for k in streams}
-part1 = rp.stream.merge(first, clock="ts", by="symbol", save_state="merge.state").collect()  # 2.
-part2 = rp.stream.merge(rest, clock="ts", by="symbol", load_state="merge.state").collect()   # 3.
+part1 = rp.stream.merge(first, clock="ts", group="symbol", save_state="merge.state").collect()  # 2.
+part2 = rp.stream.merge(rest, clock="ts", group="symbol", load_state="merge.state").collect()   # 3.
 print([str(ts.time()) for ts in part1["ts"]])                  # the rows at 09:30:03 are held
 print([str(ts.time()) for ts in part2["ts"]])                  # and come first in the next part
 print(pl.concat([part1, part2]).equals(out))                   # the two parts give the one run
@@ -193,7 +193,7 @@ carries the stream it came from, and the merged clock never steps back.
 | an error that a column is of two dtypes in two streams | a merged column holds one dtype | cast the column to one dtype in every stream, or rename it in one |
 | an error that the merged rows step back, naming a stream and its row | a resumed run's streams were cut at different clocks, or, under `restart_after_step_back`, a stream did not start again where the others did | cut every stream at the same clock, and start every stream again at the same places, such as each day's open |
 | fewer rows than the streams hold, from a run with `save_state` | the rows at the last clock read are held for the next part | load the state in the next part's run, which returns them first |
-| a carried column null on rows after the stream had a value | the row is of another `by` group, or of a day that started again, which has had no value yet | carry a column within the groups the bank reads; under `restart_after_step_back` the first rows of a day wait for that day's first value |
+| a carried column null on rows after the stream had a value | the row is of another `group`, or of a day that started again, which has had no value yet | carry a column within the groups the bank reads; under `restart_after_step_back` the first rows of a day wait for that day's first value |
 
 Every parameter is in `merge`'s
 [docstring](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.merge).

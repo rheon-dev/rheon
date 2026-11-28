@@ -1484,7 +1484,7 @@ def merge(
     *frames: pl.DataFrame,
     clock: str,
     source: str = "source",
-    by: str | None = None,
+    group: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     on_step_back: Literal["error", "skip"] = "error",
@@ -1499,7 +1499,7 @@ def merge(
     *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
     clock: str,
     source: str = "source",
-    by: str | None = None,
+    group: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     on_step_back: Literal["error", "skip"] = "error",
@@ -1513,7 +1513,7 @@ def merge(
     *frames: pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame],
     clock: str,
     source: str = "source",
-    by: str | None = None,
+    group: str | None = None,
     carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     on_step_back: Literal["error", "skip"] = "error",
@@ -1547,7 +1547,7 @@ def merge(
     ``source``
         The name of the column added to name each row's stream. Default
         ``"source"``.
-    ``by``
+    ``group``
         The column a bank reading the merged stream groups by, in every
         stream. The merged rows of each of its groups are then checked as
         that bank checks them (Notes), and ``carry`` fills each group from
@@ -1579,7 +1579,7 @@ def merge(
         state's bytes, such as a stage :func:`load_checkpoint` gives back. It
         is read when the query is built. It must have been saved merging
         streams of the same names, in the same order, on the same ``clock``
-        and ``by``, and a clock of the same dtype. Default ``None``: start
+        and ``group``, and a clock of the same dtype. Default ``None``: start
         with no state loaded.
     ``save_state``
         The path of a file to save the state to once the streams are read,
@@ -1604,7 +1604,7 @@ def merge(
     .. rubric:: Raises
 
     :class:`~rheon.ColumnNotFoundError`
-        A stream has no ``clock`` or ``by`` column of that name, or no stream
+        A stream has no ``clock`` or ``group`` column of that name, or no stream
         has a ``carry`` column. It is both a ``ValueError`` and Polars'
         ``ColumnNotFoundError``.
     :class:`~rheon.WrongTypeError`
@@ -1617,12 +1617,12 @@ def merge(
     ``ValueError``
         When the query is built: no stream is given, or a name twice; a
         stream already has a column named ``source``; ``carry`` names the
-        clock or ``by`` column, or a column twice, or one whose
+        clock or ``group`` column, or a column twice, or one whose
         ``<c>_age`` is already a stream's column or ``source``;
         ``chunk_size`` is below 1; ``restart_after_step_back`` is below 0, or
         a duration on a numeric clock, or a number on a temporal one;
         ``load_state`` is not such a state, or was saved with other streams,
-        ``clock``, ``by``, ``carry`` or clock dtype. And when the query
+        ``clock``, ``group``, ``carry`` or clock dtype. And when the query
         runs: a clock that is null, NaN or infinite, or one that steps back
         where the rule above refuses it, each naming the stream and its row,
         counted from 0 in that stream; or a step back in the merged rows of
@@ -1696,7 +1696,7 @@ def merge(
     across its groups, as it is read.
 
     **Carrying a value forward.** Each ``carry`` column is filled as
-    Polars' ``forward_fill`` fills it, over each ``by`` group's merged rows:
+    Polars' ``forward_fill`` fills it, over each ``group``'s merged rows:
     a row where it is null takes its last value before it, and a null in a
     stream is no value, so the value before it goes on. It is what a
     backward ``join_asof`` of each merged row onto the rows with a value
@@ -1714,15 +1714,15 @@ def merge(
     other: the merge reads no weight, so drop such rows first if their
     values should not be carried.
 
-    **The merged rows.** With ``by``, the merged rows of each group are read
-    as a bank grouped by ``by`` reads them, under the same
+    **The merged rows.** With ``group``, the merged rows of each group are read
+    as a bank grouped by ``group`` reads them, under the same
     ``restart_after_step_back``: a group whose rows step back where that bank
     would refuse it is refused here, naming the stream and its row. Each
     stream in clock order gives merged rows in clock order, so in one run
     this catches only a group that steps back by little where its stream
     started again. Across runs it catches streams cut at different clocks:
     a resumed run whose rows belong before rows the last run returned.
-    Without ``by`` the merged rows are checked as one group.
+    Without ``group`` the merged rows are checked as one group.
 
     **It resumes.** ``save_state`` writes each stream's last row read, how
     many times it started again, and the merged rows' last clock in each
@@ -1773,7 +1773,7 @@ def merge(
                 f"{type(c).__name__}. Name each column to carry as text, as in carry=['bid']."
             )
     skip_step_back = _check_on_step_back(on_step_back, who) == "skip"
-    settings = (clock, source, by, restart, restart_text, carried, skip_step_back)
+    settings = (clock, source, group, restart, restart_text, carried, skip_step_back)
 
     def build() -> _native.Merge:
         if loaded is not None:

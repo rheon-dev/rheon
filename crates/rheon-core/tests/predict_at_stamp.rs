@@ -82,7 +82,7 @@ fn ewm_moments_predict_with_floor_and_at_stamp_including_se() {
             max_state_bytes: None,
             clocked: true,
             lag_tolerance: None,
-            se: true,
+            emit_se: true,
             window_rows: None,
             window_clock: Some(0.9),
         })

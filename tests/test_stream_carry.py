@@ -189,7 +189,7 @@ def test_carry_is_polars_join_asof_and_forward_fill_to_the_bit(drawn, grouped, c
     frames, carry, _ = drawn
     by = ["g"] if grouped else []
     got = rp.stream.merge(
-        frames, clock="t", by=by[0] if by else None, carry=carry, chunk_size=chunk_size
+        frames, clock="t", group=by[0] if by else None, carry=carry, chunk_size=chunk_size
     )
     merged = sorted_merge(frames)
     assert_frame_equal(got, by_asof(merged, carry, by, on="_i"), check_exact=True)
@@ -197,7 +197,7 @@ def test_carry_is_polars_join_asof_and_forward_fill_to_the_bit(drawn, grouped, c
     lazy = rp.stream.merge(
         {k: f.lazy() for k, f in frames.items()},
         clock="t",
-        by=by[0] if by else None,
+        group=by[0] if by else None,
         carry=carry,
         chunk_size=chunk_size,
     )
@@ -212,14 +212,14 @@ def test_on_distinct_clocks_carry_is_join_asof_on_the_clock(drawn, grouped, chun
     frames, carry, _ = drawn
     by = ["g"] if grouped else []
     got = rp.stream.merge(
-        frames, clock="t", by=by[0] if by else None, carry=carry, chunk_size=chunk_size
+        frames, clock="t", group=by[0] if by else None, carry=carry, chunk_size=chunk_size
     )
     assert_frame_equal(got, by_asof(sorted_merge(frames), carry, by, on="t"), check_exact=True)
 
 
 def test_a_null_group_carries_its_own_values():
     a = pl.DataFrame({"t": [1, 2, 3, 4], "g": [None, "k", None, "k"], "x": [1, 2, None, None]})
-    got = rp.stream.merge({"a": a}, clock="t", by="g", carry="x")
+    got = rp.stream.merge({"a": a}, clock="t", group="g", carry="x")
     assert got["x"].to_list() == [1, 2, 1, 2]
     assert got["x_age"].to_list() == [0, 0, 2, 2]
     assert_frame_equal(got, by_forward_fill(sorted_merge({"a": a}), ["x"], ["g"]))
@@ -282,8 +282,8 @@ def cut(frames: dict[str, pl.DataFrame], at: pl.Expr, ties: dict[str, int]):
 @given(streams(), st.booleans(), st.integers(0, 30), st.integers(1, 5), st.data())
 def test_a_run_cut_at_any_clock_resumes_to_the_one_run(drawn, grouped, at_step, chunk_size, data):
     frames, carry, dtype = drawn
-    by = "g" if grouped else None
-    whole = rp.stream.merge(frames, clock="t", by=by, carry=carry)
+    group = "g" if grouped else None
+    whole = rp.stream.merge(frames, clock="t", group=group, carry=carry)
     at = pl.lit(clock([at_step], dtype))
     ties = {
         k: data.draw(st.integers(0, f.filter(pl.col("t") == at).height)) for k, f in frames.items()
@@ -292,10 +292,10 @@ def test_a_run_cut_at_any_clock_resumes_to_the_one_run(drawn, grouped, at_step, 
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "merge.state")
         out1 = rp.stream.merge(
-            first, clock="t", by=by, carry=carry, chunk_size=chunk_size, save_state=path
+            first, clock="t", group=group, carry=carry, chunk_size=chunk_size, save_state=path
         )
         out2 = rp.stream.merge(
-            rest, clock="t", by=by, carry=carry, chunk_size=chunk_size, load_state=path
+            rest, clock="t", group=group, carry=carry, chunk_size=chunk_size, load_state=path
         )
     assert_frame_equal(pl.concat([out1, out2]), whole, check_exact=True)
 
@@ -305,7 +305,7 @@ def test_a_slice_saves_the_values_carried_so_far(tmp_path):
         "a": pl.DataFrame({"t": [1.0, 2.0, 2.0, 5.0], "x": [0, None, 2, None], "g": list("pqpq")}),
         "b": pl.DataFrame({"t": [0.5, 2.0, 3.0], "y": ["u", None, "w"], "g": list("qpp")}),
     }
-    kw = {"clock": "t", "by": "g", "carry": ["x", "y"]}
+    kw = {"clock": "t", "group": "g", "carry": ["x", "y"]}
     whole = rp.stream.merge(frames, **kw)
     state = tmp_path / "s"
     for n in range(1, whole.height + 1):

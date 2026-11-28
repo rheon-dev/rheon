@@ -396,7 +396,7 @@ def specs() -> list[dict]:
         rp.spec.realized(
             "realized",
             targets=["y0", "x0"],
-            lm_window=20,
+            lm_window_rows=20,
             clock="t",
             gap_cap=6.0,
             half_life=25.0,
@@ -514,7 +514,7 @@ def specs() -> list[dict]:
             },
             kind={"skew": "standardized", "k4": "cumulant", "ac1": "standardized"},
             bias=False,
-            se=True,
+            emit_se=True,
             clock="t",
             gap_cap=6.0,
             half_life=25.0,

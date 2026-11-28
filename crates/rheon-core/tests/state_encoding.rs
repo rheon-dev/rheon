@@ -401,9 +401,9 @@ fn kalman_round_trips_with_every_optional_part_present_or_absent() {
             link: KalmanLink::Logit,
             filter: KalmanFilter::Ukf,
             ukf_rule: UkfRule::Merwe,
-            alpha: 0.8,
-            beta: 2.0,
-            kappa: 0.0,
+            ukf_alpha: 0.8,
+            ukf_beta: 2.0,
+            ukf_kappa: 0.0,
             ukf_noise: UkfNoise::Plugin,
             ..KalmanObs::default()
         },
@@ -537,7 +537,7 @@ fn kalman_round_trips_with_every_optional_part_present_or_absent() {
 
 /// Exhaustive compact + named round-trip across every combination of new
 /// `HmmCfgExtras` / `HmmExtras` options (`spherical`, `smooth_lag`, `params`,
-/// `means_weight`, `covars_prior`, `covars_weight`, `warm_clock`, `prior_rows`).
+/// `means_weight`, `covariance_prior`, `covariance_weight`, `warm_clock`, `prior_rows`).
 #[test]
 fn hmm_round_trips_with_every_optional_part_in_both_encodings() {
     use rheon_core::{ClockValue, Hmm, HmmCfg, HmmCfgExtras, HmmCovariance, SeedRule, State};
@@ -631,8 +631,8 @@ fn hmm_round_trips_with_every_optional_part_in_both_encodings() {
                         max_state_bytes: smooth_lag.map(|_| 65_536),
                         params: params.map(str::to_string),
                         means_weight: mw,
-                        covars_prior: cp,
-                        covars_weight: cw,
+                        covariance_prior: cp,
+                        covariance_weight: cw,
                     };
                     let extras = (!ex.is_empty()).then(|| Box::new(ex));
                     let mut m = Hmm::new(base_given(cov, extras)).unwrap();
@@ -682,8 +682,8 @@ fn hmm_round_trips_with_every_optional_part_in_both_encodings() {
             max_state_bytes: Some(131_072),
             params: None,
             means_weight: None,
-            covars_prior: None,
-            covars_weight: None,
+            covariance_prior: None,
+            covariance_weight: None,
         })),
     })
     .unwrap();
@@ -999,7 +999,7 @@ fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
 }
 
 /// Regression variants (evidence on `ewridge`, `positive` on `lasso`,
-/// `huber_norm` on `robust`, `average` on `pa`, and `l1`/`Optimal`/`average`/
+/// `norm` on `robust`, `average` on `pa`, and `l1`/`Optimal`/`average`/
 /// `invariant` on `sgd`) must round-trip in both compact (positional) and
 /// named msgpack encodings for every combination of trailing optional fields.
 #[test]
@@ -1158,7 +1158,7 @@ fn regression_variants_round_trip_in_both_encodings() {
         }
     }
 
-    // 3. Robust (Huber): combinations of huber_norm, refit_clock, max_state_bytes.
+    // 3. Robust (Huber): combinations of norm, refit_clock, max_state_bytes.
     for norm in [
         rheon_core::HuberNorm::Huber,
         rheon_core::HuberNorm::Tukey,
@@ -1197,7 +1197,7 @@ fn regression_variants_round_trip_in_both_encodings() {
                 min_weight_holds_learning: false,
                 refit_clock,
                 max_state_bytes,
-                huber_norm: norm,
+                norm,
             };
             let mut m = rheon_core::Robust::new(cfg).unwrap();
             for i in 0..12 {

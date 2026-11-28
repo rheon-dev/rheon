@@ -967,7 +967,7 @@ def test_partial_learning_params_freezes_omitted_components():
 
 
 def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
-    """``means_weight``, ``covars_prior`` and ``covars_weight`` pull learned
+    """``means_weight``, ``covariance_prior`` and ``covariance_weight`` pull learned
     moments toward given priors, remain chunk-invariant, and refuse conflicts."""
     df = blobs(n=250, run=40, sep=4.0, seed=33, d=2)
     m0 = [-1.0, -1.0, 1.0, 1.0]
@@ -989,9 +989,13 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
         out = bank.fit_predict(df)["h"].struct.unnest()
         return s, out
 
-    _, weak = run_priors("full", c0, means_weight=0.5, covars_prior=0.5, covars_weight=1.0)
+    _, weak = run_priors("full", c0, means_weight=0.5, covariance_prior=0.5, covariance_weight=1.0)
     s_strong, strong = run_priors(
-        "full", c0, means_weight=500.0, covars_prior=[0.5, 0.0, 0.0, 0.5], covars_weight=50.0
+        "full",
+        c0,
+        means_weight=500.0,
+        covariance_prior=[0.5, 0.0, 0.0, 0.5],
+        covariance_weight=50.0,
     )
     # Stronger means_weight stays closer to m0.
     d_weak = np.max(np.abs(np.array(weak["coef"][-1].to_list()) - np.array(m0)))
@@ -1011,7 +1015,9 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
 
     # Works under diag, spherical, and tied.
     for cov_type, c_arg in (("diag", c0), ("spherical", [1.0, 1.0]), ("tied", c0)):
-        _, out = run_priors(cov_type, c_arg, means_weight=2.0, covars_prior=0.5, covars_weight=3.0)
+        _, out = run_priors(
+            cov_type, c_arg, means_weight=2.0, covariance_prior=0.5, covariance_weight=3.0
+        )
         assert out["filtered_state0"].null_count() == 0
 
     # Refusals: beside prior_rows, without given states, invalid values.
@@ -1025,7 +1031,7 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
             means=m0,
             covs=c0,
             prior_rows=2.0,
-            covars_prior=0.5,
+            covariance_prior=0.5,
         )
     with pytest.raises(ValueError, match="prior_rows"):
         rp.spec.hmm(
@@ -1037,7 +1043,7 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
             means=m0,
             covs=c0,
             prior_rows=2.0,
-            covars_weight=2.0,
+            covariance_weight=2.0,
         )
     with pytest.raises(ValueError, match="means"):
         rp.spec.hmm(
@@ -1059,7 +1065,7 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
             covs=c0,
             means_weight=-1.0,
         )
-    with pytest.raises(ValueError, match="covars_prior"):
+    with pytest.raises(ValueError, match="covariance_prior"):
         rp.spec.hmm(
             "h",
             features=["x0", "x1"],
@@ -1068,7 +1074,7 @@ def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
             half_life=50.0,
             means=m0,
             covs=c0,
-            covars_prior=-0.5,
+            covariance_prior=-0.5,
         )
 
 

@@ -516,7 +516,7 @@ delays = pl.DataFrame(
 ).with_columns(pl.col("t").dt.replace_time_zone("Europe/Amsterdam"))
 out = rp.stream.with_windows(
     delays,
-    usual=rp.ops.ewm_profile("delay", period="1d", buckets=4, half_life="7d", closed="left"),
+    usual=rp.ops.ewm_profile("delay", period="1d", bins=4, half_life="7d", closed="left"),
     clock="t", gap_cap="1d",
 )
 out = out.with_columns(excess=pl.col("delay") - pl.col("usual"))  # less what that time of day had shown
@@ -545,7 +545,7 @@ zone, as Polars' `dt` namespace reads a zoned value.** The rows above are
 at 00:00, 06:00, 12:00 and 18:00 Amsterdam time on each day, and the third
 day is the one the clocks go forward: its 06:00 is five hours after its
 midnight, and still the rush hour's phase. A phase is `t − t.dt.truncate(period)`
-less an `offset`, so a week starts on Monday, as Polars truncates one. A
+less an `origin`, so a week starts on Monday, as Polars truncates one. A
 calendar period (`"1mo"`) has no fixed length, and is refused.
 
 **A phase is read once it holds `min_samples` rows, 1 by default**, counted
@@ -560,8 +560,8 @@ of `x²` falls below the square of the fit of `x`.
 
 **A group's state holds its phases, bounded by the period's shape and the
 window, never by the stream's length**, and held to `max_state_bytes`:
-56 bytes a bucket, and under a window each row inside it; the operator's
-docstring gives each form's bytes. A call whose buckets pass the cap is
+56 bytes a bin, and under a window each row inside it; the operator's
+docstring gives each form's bytes. A call whose bins pass the cap is
 refused before it reads a row; a state the data grows (a window's rows, a
 quantile's sketches) warns once at half the cap and refuses the row that
 would pass it.
@@ -646,22 +646,22 @@ interaction columns as plain Polars expressions.** None holds state or reads
 across rows, so they need no `with_windows`, stream in any `LazyFrame` query,
 and give identical numbers under any chunking.
 
-- **`rp.ops.bspline(col, knots, *, degree=3, include_bias=False, extrapolate="constant")`**
+- **`rp.ops.bspline(input, knots, *, degree=3, include_bias=False, extrapolate="constant")`**
   builds clamped B-spline basis functions on strictly increasing knots
   `[k_0, ..., k_{K-1}]` (repeating both boundary knots with multiplicity
   `degree + 1`), matching `scipy.interpolate.BSpline.design_matrix` and R's
   `splines::bs`. Dropping the first column under the default
   `include_bias=False` avoids collinearity with a model's intercept.
-- **`rp.ops.natural_spline(col, knots, *, include_bias=False)`** projects the
+- **`rp.ops.natural_spline(input, knots, *, include_bias=False)`** projects the
   clamped cubic B-spline basis onto the orthonormal nullspace of its boundary
   second-derivative constraints via Householder QR, matching R's `splines::ns`:
   every basis function has zero second derivative at `k_0` and `k_{K-1}` and
   extrapolates linearly beyond them. Paired with `rheon.spec.sgd(loss="logistic")`,
   it gives an online spline probability calibrator.
-- **`rp.ops.hinge(col, knots)`** emits only the piecewise-linear hinge columns
-  `max(0, x - k)` for each knot `k` (leaving `col` itself to the model's
+- **`rp.ops.hinge(input, knots)`** emits only the piecewise-linear hinge columns
+  `max(0, x - k)` for each knot `k` (leaving `input` itself to the model's
   feature list when a baseline slope is wanted).
-- **`rp.ops.interactions(cols, *, degree=2, include_self=False, sep="_x_")`**
+- **`rp.ops.interactions(cols, *, degree=2, include_self=False, separator="_x_")`**
   emits every product of order `2` through `degree` in lexicographic order,
   matching the nonlinear columns of scikit-learn's `PolynomialFeatures`.
 

@@ -1135,7 +1135,7 @@ def kind_spec(kind: str, **kw) -> dict:
     if builder == "realized":
         # A confidence low enough that some rows of these frames, which hold
         # no jump, are flagged: the flag reads the row's own return.
-        a["lm_beta"] = 0.01
+        a["lm_confidence"] = 0.01
     a.update(kw)
     return getattr(rp.spec, builder)("m", **{k: v for k, v in a.items() if v is not None})
 

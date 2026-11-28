@@ -292,7 +292,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     // would read: `\u0040` is the same key to JSON.
     (
         "ewm_moments",
-        r#"{"type": "ewm_moments", "se": true, "kind": {"kurt": "standardized"},
+        r#"{"type": "ewm_moments", "emit_se": true, "kind": {"kurt": "standardized"},
             "terms": {"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac": {"x0": 1, "x1\u00401": 1}}}"#,
         r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
         UNTIMED,
@@ -648,7 +648,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     ),
     (
         "realized",
-        r#"{"type": "realized", "lm_window": 30}"#,
+        r#"{"type": "realized", "lm_window_rows": 30}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
         ALL,
     ),
@@ -660,7 +660,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     ),
     (
         "realized_clock",
-        r#"{"type": "realized", "window_size": @20, "lm_window": 12}"#,
+        r#"{"type": "realized", "window_size": @20, "lm_window_rows": 12}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
         ALL,
     ),

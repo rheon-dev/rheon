@@ -14,7 +14,7 @@ from rheon._spec import _SKIPPED_WHEN_ABSENT, _checked, _common, _mirror_target
 # The keys the builder writes only when given, as the Rust spec skips them
 # when absent; entered here, since `_spec.py` stands at the source cap.
 _SKIPPED_WHEN_ABSENT["ewm_moments"] = frozenset(
-    {"kind", "bias", "se", "lag_tolerance", "window_rows", "window_size", "max_state_bytes"}
+    {"kind", "bias", "emit_se", "lag_tolerance", "window_rows", "window_size", "max_state_bytes"}
 )
 
 
@@ -47,7 +47,7 @@ def ewm_moments(
     features: list[str] | None = None,
     kind: Literal["central", "raw", "standardized", "cumulant"] | dict[str, str] | None = None,
     bias: bool | None = None,
-    se: bool = False,
+    emit_se: bool = False,
     lag_tolerance: float | Duration | None = None,
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
@@ -107,7 +107,7 @@ def ewm_moments(
         each term the default its statistic has in Polars: a variance
         unbiased, as ``ewm_var``'s, and every other order the plug-in, as
         ``skew``'s and ``kurtosis``'s.
-    ``se``
+    ``emit_se``
         Also emit each term's standard error, ``se_<term>``. The state then
         keeps the moments to twice each term's order. Default ``False``.
     ``lag_tolerance``
@@ -144,7 +144,7 @@ def ewm_moments(
         leg with no spread, an unbiased form whose denominator keeps no
         digit, or a value past a double's range.
     ``se_<term>``
-        Under ``se=True``: each term's standard error, after every term, in
+        Under ``emit_se=True``: each term's standard error, after every term, in
         the same order.
     ``weight_sum``
         The weight learned before the row, decayed, and inside the window
@@ -231,7 +231,7 @@ def ewm_moments(
     merging summaries of its parts by the same rule, so a row leaving the
     window is never subtracted and nothing drifts; each part is decayed to
     the next one's end, so decay still weighs the window's rows. The
-    standard error, under ``se``, is the delta method's at Kish's
+    standard error, under ``emit_se``, is the delta method's at Kish's
     effective size, ``sqrt(r_2 E[IF²])`` for the term's influence function
     ``IF``.
 
@@ -285,8 +285,8 @@ def ewm_moments(
         model["kind"] = dict(kind) if isinstance(kind, dict) else kind
     if bias is not None:
         model["bias"] = bias
-    if se:
-        model["se"] = True
+    if emit_se:
+        model["emit_se"] = True
     if lag_tolerance is not None:
         model["lag_tolerance"] = lag_tolerance
     if window_rows is not None:

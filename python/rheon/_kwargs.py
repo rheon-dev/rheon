@@ -126,8 +126,8 @@ class CommonKwargs(TypedDict, total=False):
     influence_half_life: float | Duration | None
     emit_feature_health: bool
     feature_health_half_life: float | Duration | None
-    feature_ks_window: int | None
-    feature_ks_recent: int | None
+    feature_ks_window_rows: int | None
+    feature_ks_recent_rows: int | None
     embargo: float | Duration | None
     label_clock: str | Sequence[str] | None
     max_held_rows: int | None

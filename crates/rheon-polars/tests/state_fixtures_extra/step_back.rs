@@ -128,7 +128,7 @@ fn merge_step_back_cfg() -> MergeConfig {
     MergeConfig {
         clock: "t".into(),
         source: "source".into(),
-        by: Some("g".into()),
+        group: Some("g".into()),
         restart: Some(rheon_polars::Restart::Float(10.0)),
         restart_text: Some("10".into()),
         skip_step_back: true,

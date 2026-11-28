@@ -32,7 +32,7 @@ def huber(
     huber_refit_rows: int | None = None,
     huber_refit_span: float | Duration | None = None,
     refit_budget: float | None = None,
-    huber_norm: Literal["huber", "tukey", "andrews", "hampel", "ramsay"] | None = None,
+    norm: Literal["huber", "tukey", "andrews", "hampel", "ramsay"] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Huber regression on running sums, which down-weights the rows a prediction misses by far.
@@ -52,14 +52,14 @@ def huber(
     ``huber_delta``
         The cut, in units of the residuals' scale ``s``, above 0: a residual
         within it counts at full weight, and one beyond it pulls the fit less
-        the further it misses. Default depends on ``huber_norm``: 1.345 for
+        the further it misses. Default depends on ``norm``: 1.345 for
         ``"huber"`` (95% Gaussian efficiency, matching statsmodels' ``HuberT``
         and scikit-learn's ``HuberRegressor`` 1.35), 4.685 for ``"tukey"``,
         1.339 for ``"andrews"``, 2.0 for ``"hampel"``, and 0.3 for
         ``"ramsay"``. ``inf`` cuts nothing (least squares), except under
         ``"ramsay"`` where it is refused. :func:`sgd`'s ``huber_delta`` is the
         same constant in the same unit.
-    ``huber_norm``
+    ``norm``
         The M-estimator weight function: ``"huber"`` (default, monotone), or
         one of four redescending norms matching ``statsmodels.robust.norms``:
         ``"tukey"`` (biweight), ``"andrews"`` (wave), ``"hampel"`` (three-part
@@ -221,8 +221,8 @@ def huber(
     As every builder does (:mod:`rheon.spec`), and ``ValueError``
     naming the problem for:
 
-    - a ``huber_delta`` not above 0 (or ``inf`` under ``huber_norm="ramsay"``),
-      a ``huber_norm`` not one of its five words, a ``huber_scale`` other than
+    - a ``huber_delta`` not above 0 (or ``inf`` under ``norm="ramsay"``),
+      a ``norm`` not one of its five words, a ``huber_scale`` other than
       ``"mad"`` or ``"rms"``, and a ``huber_scale_half_life`` not above 0;
     - a ``ridge`` below 0 or not finite, a ``solve_every`` below 0, and a
       ``max_rows_between_solves`` of 0;
@@ -505,7 +505,7 @@ def huber(
         "huber_refit_rows": huber_refit_rows,
         "huber_refit_span": huber_refit_span,
         "refit_budget": refit_budget,
-        "huber_norm": huber_norm,
+        "norm": norm,
     }
     # Written only when given: the Rust spec skips them when absent.
     skipped = _SKIPPED_WHEN_ABSENT["huber"]

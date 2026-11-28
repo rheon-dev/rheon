@@ -15,7 +15,7 @@ pub struct VectorArRead {
     /// Periods of the impulse responses and the decomposition.
     pub periods: usize,
     /// The impulse responses' standard errors beside them.
-    pub stderr: bool,
+    pub se: bool,
     /// A test's caused series, its causing ones (absent: every other) and
     /// its kind (absent: the spec's).
     pub caused: Vec<String>,
@@ -71,7 +71,7 @@ impl Bank {
     /// `spec`, `group` and `instance`, per group in key order and instance:
     ///
     /// - `Irf` and `OrthIrf`: `period` (0 to `periods`), `response`,
-    ///   `impulse`, `value` and, with `stderr`, `stderr`;
+    ///   `impulse`, `value` and, with `se`, `stderr`;
     /// - `Fevd`: `horizon` (1 to `periods`), `response`, `shock`, `share`;
     /// - `Stability`: `root` (largest modulus first), `real`, `imag`,
     ///   `modulus`, `stable`;
@@ -190,7 +190,7 @@ fn fill(
             } else {
                 fit.ma_rep(h)
             };
-            let se = read.stderr.then(|| fit.irf_stderr(h, orth));
+            let se = read.se.then(|| fit.irf_stderr(h, orth));
             for i in 0..=h {
                 for r in 0..k {
                     for c in 0..k {

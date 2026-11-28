@@ -154,8 +154,10 @@ def test_default_error_policy_is_bit_identical_across_all_surfaces(tmp_path: Pat
     a = df.filter(pl.col("g") == "a")
     b = df.filter(pl.col("g") == "b")
     ms1, ms2 = tmp_path / "m1.state", tmp_path / "m2.state"
-    m1 = rp.stream.merge({"a": a, "b": b}, clock="t", by="g", save_state=ms1)
-    m2 = rp.stream.merge({"a": a, "b": b}, clock="t", by="g", on_step_back="error", save_state=ms2)
+    m1 = rp.stream.merge({"a": a, "b": b}, clock="t", group="g", save_state=ms1)
+    m2 = rp.stream.merge(
+        {"a": a, "b": b}, clock="t", group="g", on_step_back="error", save_state=ms2
+    )
     assert_frame_equal(m1, m2, check_exact=True)
     assert ms1.read_bytes() == ms2.read_bytes()
 
@@ -822,8 +824,10 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        got = rp.stream.merge({"a": a, "b": b}, clock="t", by="g", carry=["v"], on_step_back="skip")
-    want = rp.stream.merge({"a": clean_a, "b": clean_b}, clock="t", by="g", carry=["v"])
+        got = rp.stream.merge(
+            {"a": a, "b": b}, clock="t", group="g", carry=["v"], on_step_back="skip"
+        )
+    want = rp.stream.merge({"a": clean_a, "b": clean_b}, clock="t", group="g", carry=["v"])
     assert_frame_equal(got, want, check_exact=True)
 
     msgs = _step_back_warnings(caught)
@@ -836,7 +840,7 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
             c_out = rp.stream.merge(
                 {"a": a.lazy(), "b": b.lazy()},
                 clock="t",
-                by="g",
+                group="g",
                 carry=["v"],
                 on_step_back="skip",
                 chunk_size=cs,
@@ -850,7 +854,7 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
         p1 = rp.stream.merge(
             {"a": a.slice(0, 4), "b": b.slice(0, 2)},
             clock="t",
-            by="g",
+            group="g",
             carry=["v"],
             on_step_back="skip",
             save_state=st,
@@ -858,7 +862,7 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
         p2 = rp.stream.merge(
             {"a": a.slice(4), "b": b.slice(2)},
             clock="t",
-            by="g",
+            group="g",
             carry=["v"],
             on_step_back="skip",
             load_state=st,
@@ -880,7 +884,7 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
         rp.stream.merge(
             {"a": a1, "b": b1},
             clock="t",
-            by="g",
+            group="g",
             restart_after_step_back=2.0,
             on_step_back="skip",
             save_state=st_cross,
@@ -888,7 +892,7 @@ def test_merge_skip_matches_oracle_chunks_save_load_restart_and_temporal(tmp_pat
         resumed = rp.stream.merge(
             {"a": a2, "b": b2},
             clock="t",
-            by="g",
+            group="g",
             restart_after_step_back=2.0,
             on_step_back="skip",
             load_state=st_cross,

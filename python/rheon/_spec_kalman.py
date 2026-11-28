@@ -36,9 +36,9 @@ def kalman(
     dispersion: float | None = None,
     filter: Literal["linear", "ekf", "ukf"] = "linear",
     ukf_rule: Literal["scalar_index", "merwe"] | None = None,
-    alpha: float | None = None,
-    beta: float | None = None,
-    kappa: float | None = None,
+    ukf_alpha: float | None = None,
+    ukf_beta: float | None = None,
+    ukf_kappa: float | None = None,
     ukf_noise: Literal["expected", "plugin"] | None = None,
     coef_prior: list[list[float]] | None = None,
     emit_loglik: bool = False,
@@ -278,16 +278,17 @@ def kalman(
         (maximum prediction shift ``1.7e-15`` when reversing 20 features,
         against ``7.6%`` for Poisson, ``4.9%`` for Gamma and ``1.8%`` for
         binomial under ``"merwe"``).
-    ``alpha``, ``beta``, ``kappa``
+    ``ukf_alpha``, ``ukf_beta``, ``ukf_kappa``
         Sigma-point parameters for ``filter="ukf"`` with ``ukf_rule="merwe"``
-        (refused otherwise). Defaults ``alpha=1.0``, ``beta=2.0``,
-        ``kappa=0.0`` (``alpha > 0``, all finite, and ``k + kappa > 0``).
-        ``beta = 2`` is Wan and van der Merwe's Gaussian optimum.
-        ``alpha = 1`` is used instead of their small ``1e-3`` because at
-        ``alpha = 1e-3`` the center weight ``1 - 1 / alpha ** 2`` is roughly
-        ``-1e6`` at every ``k``, costing about six digits to cancellation and
-        collapsing the sigma points onto the mean; at ``alpha = 1, kappa = 0``
-        the center weight is 0 with no negative weights.
+        (refused otherwise). Defaults ``ukf_alpha=1.0``, ``ukf_beta=2.0``,
+        ``ukf_kappa=0.0`` (``ukf_alpha > 0``, all finite, and
+        ``k + ukf_kappa > 0``). ``ukf_beta = 2`` is Wan and van der Merwe's
+        Gaussian optimum. ``ukf_alpha = 1`` is used instead of their small
+        ``1e-3`` because at ``ukf_alpha = 1e-3`` the center weight
+        ``1 - 1 / ukf_alpha ** 2`` is roughly ``-1e6`` at every ``k``, costing
+        about six digits to cancellation and collapsing the sigma points onto
+        the mean; at ``ukf_alpha = 1, ukf_kappa = 0`` the center weight is 0
+        with no negative weights.
     ``ukf_noise``
         How ``filter="ukf"`` forms the observation variance ``R``:
         ``"expected"`` (the default, the sigma-point expectation
@@ -434,7 +435,7 @@ def kalman(
       Tweedie or not above 1 or equal to 2, ``fit_intercept=False`` on an
       inverse or power link, ``covariance_form="square_root"`` with
       ``filter != "linear"``, UKF options with ``filter != "ukf"``, or
-      ``alpha`` / ``beta`` / ``kappa`` without ``ukf_rule="merwe"``.
+      ``ukf_alpha`` / ``ukf_beta`` / ``ukf_kappa`` without ``ukf_rule="merwe"``.
 
     .. rubric:: The update
 
@@ -803,12 +804,12 @@ def kalman(
         model["filter"] = filter
     if ukf_rule is not None:
         model["ukf_rule"] = ukf_rule
-    if alpha is not None:
-        model["alpha"] = alpha
-    if beta is not None:
-        model["beta"] = beta
-    if kappa is not None:
-        model["kappa"] = kappa
+    if ukf_alpha is not None:
+        model["ukf_alpha"] = ukf_alpha
+    if ukf_beta is not None:
+        model["ukf_beta"] = ukf_beta
+    if ukf_kappa is not None:
+        model["ukf_kappa"] = ukf_kappa
     if ukf_noise is not None:
         model["ukf_noise"] = ukf_noise
     if coef_prior is not None:

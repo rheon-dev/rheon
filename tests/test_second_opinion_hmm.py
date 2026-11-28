@@ -1383,7 +1383,7 @@ def _spherical_em_error(seed: int) -> float:
 
 
 def _conjugate_priors_error(seed: int) -> float:
-    """Conjugate priors (``means_weight``, ``covars_prior``, ``covars_weight``)
+    """Conjugate priors (``means_weight``, ``covariance_prior``, ``covariance_weight``)
     at ``half_life=inf`` against ``hmmlearn.GaussianHMM._do_mstep`` on every
     covariance shape."""
     s = hmm_stream(seed, k=2, n=60, d=2)
@@ -1406,8 +1406,8 @@ def _conjugate_priors_error(seed: int) -> float:
             means=m0.ravel().tolist(),
             covs=c0_arg,
             means_weight=mw,
-            covars_prior=cp,
-            covars_weight=cw,
+            covariance_prior=cp,
+            covariance_weight=cw,
         )
         out = rp.ModelBank([sp]).fit_predict(frame)["h"].struct.unnest()
 
@@ -1501,7 +1501,7 @@ def _partial_params_error(seed: int) -> float:
             transition=pi0.ravel().tolist(),
             params=params_str,
             means_weight=mw,
-            **({"covars_prior": cp, "covars_weight": cw} if "c" in params_str else {}),
+            **({"covariance_prior": cp, "covariance_weight": cw} if "c" in params_str else {}),
         )
         out = rp.ModelBank([sp]).fit_predict(frame)["h"].struct.unnest()
         hm = GaussianHMM(
@@ -1550,8 +1550,8 @@ def _partial_params_error(seed: int) -> float:
         covs=c0_flat,
         transition=pi0.ravel().tolist(),
         params="c",
-        covars_prior=cp,
-        covars_weight=cw,
+        covariance_prior=cp,
+        covariance_weight=cw,
     )
     out_c = rp.ModelBank([sp_c]).fit_predict(frame)["h"].struct.unnest()
     g_w = np.zeros(k)
@@ -1604,8 +1604,8 @@ def _hmm_ext_guard_outputs() -> list[pl.DataFrame]:
             covs=s["c0"].ravel().tolist(),
             params="mc",
             means_weight=2.0,
-            covars_prior=0.5,
-            covars_weight=3.0,
+            covariance_prior=0.5,
+            covariance_weight=3.0,
         )
         out.append(rp.ModelBank([sp1, sp2]).fit_predict(frame))
     return out

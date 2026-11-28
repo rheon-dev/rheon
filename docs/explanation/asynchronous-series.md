@@ -100,7 +100,7 @@ L = 64
 lagged = rp.spec.ew_cov("c", features=["x_1", "x_2"], half_life=float("inf"), stats=[], lags=list(range(1, L)))
 bank = rp.ModelBank([lagged])
 bank.fit_predict(ones)
-print(f"lag inversion, L = {L}:      corr {rp.corr.epps_invert(bank.gram('c')[0], L=L)[0, 1]:.3f} from {ones.height} returns")
+print(f"lag inversion, L = {L}:      corr {rp.corr.epps_invert(bank.gram('c')[0], lags=L)[0, 1]:.3f} from {ones.height} returns")
 ```
 
 ```text

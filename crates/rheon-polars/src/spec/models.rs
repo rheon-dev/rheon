@@ -980,7 +980,7 @@ impl Spec {
             // Its features are checked above. Every value is the model's own
             // to check, here at the call, among them the state's bytes
             // against `max_state_bytes` where the settings fix them (a window
-            // of rows, `lm_window`). A decay refused is `decays`' to say.
+            // of rows, `lm_window_rows`). A decay refused is `decays`' to say.
             ModelKind::Realized { window_size, .. } => {
                 let bad_window = window_size
                     .as_ref()
@@ -1863,17 +1863,17 @@ impl Spec {
                 solve_every,
                 feature_sets,
                 refit_budget,
-                huber_norm,
+                norm,
                 ..
             } => {
                 const HUBER_NORM: [&str; 5] = ["huber", "tukey", "andrews", "hampel", "ramsay"];
-                let norm_known = huber_norm
+                let norm_known = norm
                     .as_ref()
                     .is_none_or(|n| HUBER_NORM.contains(&n.as_str()));
-                if let Some(n) = huber_norm
+                if let Some(n) = norm
                     && !norm_known
                 {
-                    no.refuse(spec_words_refusal(&self.name, "huber_norm", &HUBER_NORM, n));
+                    no.refuse(spec_words_refusal(&self.name, "norm", &HUBER_NORM, n));
                 }
                 if let Some(d) = huber_delta.filter(|d| !positive(d.0)) {
                     no.refuse(format!(
@@ -1884,11 +1884,11 @@ impl Spec {
                         num_label(d.0)
                     ));
                 }
-                if huber_norm.as_deref() == Some("ramsay")
+                if norm.as_deref() == Some("ramsay")
                     && huber_delta.is_some_and(|d| d.0.is_infinite())
                 {
                     no.refuse(format!(
-                        "spec {:?}: huber_delta must be finite under huber_norm=\"ramsay\", \
+                        "spec {:?}: huber_delta must be finite under norm=\"ramsay\", \
                          because its weight exp(-huber_delta * |e| / s) drops every nonzero \
                          residual to 0 at inf. Set huber_delta to a finite positive value, such \
                          as 0.3.",
@@ -2722,12 +2722,12 @@ impl Spec {
                     self.model.kind_name()
                 ));
             }
-            if self.feature_ks_window.is_some() || self.feature_ks_recent.is_some() {
+            if self.feature_ks_window_rows.is_some() || self.feature_ks_recent_rows.is_some() {
                 ks_refused = true;
                 no.refuse(format!(
-                    "spec {name:?}: feature_ks_window and feature_ks_recent do not apply to {}, \
+                    "spec {name:?}: feature_ks_window_rows and feature_ks_recent_rows do not apply to {}, \
                      which fits no coefficients of its features: they watch the features a fit's \
-                     coefficients lean on. Leave out feature_ks_window and feature_ks_recent.",
+                     coefficients lean on. Leave out feature_ks_window_rows and feature_ks_recent_rows.",
                     self.model.kind_name()
                 ));
             }
@@ -2807,37 +2807,37 @@ impl Spec {
             }
         }
         if !ks_refused {
-            match (self.feature_ks_window, self.feature_ks_recent) {
+            match (self.feature_ks_window_rows, self.feature_ks_recent_rows) {
                 (Some(_), None) => no.refuse(format!(
-                    "spec {name:?}: feature_ks_window requires feature_ks_recent to set how many \
+                    "spec {name:?}: feature_ks_window_rows requires feature_ks_recent_rows to set how many \
                      recent rows are tested against the older part of the window. Set \
-                     feature_ks_recent, or leave out feature_ks_window."
+                     feature_ks_recent_rows, or leave out feature_ks_window_rows."
                 )),
                 (None, Some(_)) => no.refuse(format!(
-                    "spec {name:?}: feature_ks_recent requires feature_ks_window to set the total \
-                     window size. Set feature_ks_window, or leave out feature_ks_recent."
+                    "spec {name:?}: feature_ks_recent_rows requires feature_ks_window_rows to set the total \
+                     window size. Set feature_ks_window_rows, or leave out feature_ks_recent_rows."
                 )),
                 (Some(w), Some(r)) => {
                     if self.k() == 0 {
                         no.refuse(format!(
-                            "spec {name:?}: feature_ks_window and feature_ks_recent watch each \
+                            "spec {name:?}: feature_ks_window_rows and feature_ks_recent_rows watch each \
                              feature's rolling distribution, but {} has no features. Leave out \
-                             feature_ks_window and feature_ks_recent.",
+                             feature_ks_window_rows and feature_ks_recent_rows.",
                             self.model.kind_name()
                         ));
                     } else {
                         if r == 0 {
                             no.refuse(format!(
-                                "spec {name:?}: feature_ks_recent must be at least 1, but it is \
-                                 0. Set feature_ks_recent to a positive row count below \
-                                 feature_ks_window."
+                                "spec {name:?}: feature_ks_recent_rows must be at least 1, but it is \
+                                 0. Set feature_ks_recent_rows to a positive row count below \
+                                 feature_ks_window_rows."
                             ));
                         }
                         if w <= r {
                             no.refuse(format!(
-                                "spec {name:?}: feature_ks_window ({w}) must be greater than \
-                                 feature_ks_recent ({r}), leaving at least 1 reference row. \
-                                 Raise feature_ks_window or lower feature_ks_recent."
+                                "spec {name:?}: feature_ks_window_rows ({w}) must be greater than \
+                                 feature_ks_recent_rows ({r}), leaving at least 1 reference row. \
+                                 Raise feature_ks_window_rows or lower feature_ks_recent_rows."
                             ));
                         }
                         let cap = self
@@ -2847,9 +2847,9 @@ impl Spec {
                         if bytes > cap {
                             let max_w = cap / (std::mem::size_of::<f64>() as u64 * self.k() as u64);
                             no.refuse(format!(
-                                "spec {name:?}: feature_ks_window ({w}) across {} features holds \
+                                "spec {name:?}: feature_ks_window_rows ({w}) across {} features holds \
                                  {bytes} bytes per group, above the {cap} byte per-group cap. \
-                                 Lower feature_ks_window to {max_w} or below.",
+                                 Lower feature_ks_window_rows to {max_w} or below.",
                                 self.k(),
                             ));
                         }

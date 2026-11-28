@@ -170,11 +170,11 @@ def test_btcusdt_minutes_are_the_papers_measures_and_the_test_is_finite():
 def test_lee_myklands_statistic_and_its_flag():
     """``lm`` is the paper's ``L_i`` from the ``K - 1`` returns before the
     row, to the rounding of the products; the flag is the paper's test at
-    ``lm_beta``, with ``n`` the window's count of returns, on either side
+    ``lm_confidence``, with ``n`` the window's count of returns, on either side
     of its critical value; the largest planted jumps are flagged."""
     n, k, w = 2_340, 200, 390
     r = ref.sv_returns(n, 17, True)
-    spec = rp.spec.realized("v", targets=["r"], half_life=INF, window_rows=w, lm_window=k)
+    spec = rp.spec.realized("v", targets=["r"], half_life=INF, window_rows=w, lm_window_rows=k)
     out = _fit(spec, _frame(r))
     want = ref.lee_mykland(r, k)
     lm = out["lm_r"].to_numpy()[:n]
@@ -196,7 +196,7 @@ def test_lee_myklands_statistic_and_its_flag():
     # A lower confidence flags more rows, the statistic itself unmoved.
     lax = _fit(
         rp.spec.realized(
-            "v", targets=["r"], half_life=INF, window_rows=w, lm_window=k, lm_beta=0.5
+            "v", targets=["r"], half_life=INF, window_rows=w, lm_window_rows=k, lm_confidence=0.5
         ),
         _frame(r),
     )
@@ -205,10 +205,10 @@ def test_lee_myklands_statistic_and_its_flag():
 
 
 KWS = [
-    {"half_life": 40.0, "lm_window": 30},
+    {"half_life": 40.0, "lm_window_rows": 30},
     {"half_life": INF, "window_rows": 60},
     {"half_life": INF, "window_size": 25.0},
-    {"half_life": INF, "window_size": 25.0, "closed": "both", "lm_window": 12},
+    {"half_life": INF, "window_size": 25.0, "closed": "both", "lm_window_rows": 12},
 ]
 
 
@@ -329,8 +329,8 @@ def test_names_match_the_realized_struct():
         ({"half_life": INF, "window_size": -1.0}, "window_size must be a finite span"),
         ({"half_life": INF, "window_rows": 5, "window_size": 5.0}, "two windows"),
         ({"half_life": 10.0, "closed": "both"}, "there is no clock window"),
-        ({"half_life": 10.0, "lm_window": 2}, "lm_window must be at least 3"),
-        ({"half_life": 10.0, "lm_beta": 1.0}, "lm_beta must be above 0 and below 1"),
+        ({"half_life": 10.0, "lm_window_rows": 2}, "lm_window_rows must be at least 3"),
+        ({"half_life": 10.0, "lm_confidence": 1.0}, "lm_confidence must be above 0 and below 1"),
         ({"half_life": 10.0, "coef_every": 5}, "coef_every"),
         ({"half_life": INF, "window_rows": 10_000_000}, "largest window_rows that fits"),
     ],

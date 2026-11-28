@@ -179,11 +179,11 @@ pub(super) fn lm_jump(l: f64, n: f64, beta: f64) -> f64 {
 }
 
 impl Series {
-    /// The numbers a series holds outside a window and `lm_window`, in
+    /// The numbers a series holds outside a window and `lm_window_rows`, in
     /// bytes: 18 of 8.
     pub(super) const BYTES: u64 = 8 * 18;
 
-    pub(super) fn new(lm_window: Option<usize>) -> Self {
+    pub(super) fn new(lm_window_rows: Option<usize>) -> Self {
         Self {
             hi: [0.0; SUMS],
             lo: [0.0; SUMS],
@@ -192,7 +192,7 @@ impl Series {
             c2: 0.0,
             seen: 0,
             held: VecDeque::new(),
-            lm: lm_window.map(|_| LmRing::new()),
+            lm: lm_window_rows.map(|_| LmRing::new()),
         }
     }
 
@@ -240,7 +240,13 @@ impl Series {
 
     /// The return `r` learned at the weight `w > 0`, a window's row `seq`
     /// where there is a window.
-    pub(super) fn learn(&mut self, r: f64, w: f64, seq: Option<u64>, lm_window: Option<usize>) {
+    pub(super) fn learn(
+        &mut self,
+        r: f64,
+        w: f64,
+        seq: Option<u64>,
+        lm_window_rows: Option<usize>,
+    ) {
         let a = r.abs();
         let c = libm::cbrt(a);
         let rv = w * (r * r);
@@ -282,7 +288,7 @@ impl Series {
                 links,
             });
         }
-        if let (Some(ring), Some(k)) = (self.lm.as_mut(), lm_window)
+        if let (Some(ring), Some(k)) = (self.lm.as_mut(), lm_window_rows)
             && self.seen >= 1
         {
             ring.push(bv, w, k);
@@ -365,14 +371,14 @@ impl Series {
     }
 
     /// Whether a restored series has the shape its settings give it: an
-    /// `lm_window` ring exactly when one is set and no longer than it, and
+    /// `lm_window_rows` ring exactly when one is set and no longer than it, and
     /// a window's entries, in order, only of rows the window holds.
     pub(super) fn has_shape(
         &self,
-        lm_window: Option<usize>,
+        lm_window_rows: Option<usize>,
         rows: Option<&VecDeque<Held>>,
     ) -> bool {
-        let lm = match (&self.lm, lm_window) {
+        let lm = match (&self.lm, lm_window_rows) {
             (None, None) => true,
             (Some(r), Some(k)) => r.products.len() <= k.saturating_sub(2),
             _ => false,

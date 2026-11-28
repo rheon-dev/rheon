@@ -966,7 +966,7 @@ impl PyModelBank {
     /// is `"irf"`, `"orth_irf"`, `"fevd"`, `"stability"`, `"mean"`,
     /// `"order"` or `"causality"`.
     #[pyo3(signature = (
-        spec, group=None, table="irf", periods=10, stderr=false, caused=None, causing=None,
+        spec, group=None, table="irf", periods=10, se=false, caused=None, causing=None,
         kind=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -976,7 +976,7 @@ impl PyModelBank {
         group: Option<Vec<Option<String>>>,
         table: &str,
         periods: usize,
-        stderr: bool,
+        se: bool,
         caused: Option<Vec<String>>,
         causing: Option<Vec<String>>,
         kind: Option<String>,
@@ -986,7 +986,7 @@ impl PyModelBank {
             rheon_polars::rheon_core::VectorArTable::parse(table).map_err(PyValueError::new_err)?;
         let read = rheon_polars::VectorArRead {
             periods,
-            stderr,
+            se,
             caused: caused.unwrap_or_default(),
             causing,
             kind,
@@ -1258,7 +1258,7 @@ fn merge_parts(
     frames: Vec<PyDataFrame>,
     clock: String,
     source: String,
-    by: Option<String>,
+    group: Option<String>,
     restart: Option<PyRestart>,
     restart_text: Option<String>,
     carry: Option<Vec<String>>,
@@ -1271,7 +1271,7 @@ fn merge_parts(
     let cfg = rheon_polars::MergeConfig {
         clock,
         source,
-        by,
+        group,
         restart: restart.map(Into::into),
         restart_text,
         carry: carry.unwrap_or_default(),
@@ -1283,14 +1283,14 @@ fn merge_parts(
 #[pymethods]
 impl PyMerge {
     #[new]
-    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
+    #[pyo3(signature = (names, frames, clock, source, group=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
         frames: Vec<PyDataFrame>,
         clock: String,
         source: String,
-        by: Option<String>,
+        group: Option<String>,
         restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
@@ -1300,7 +1300,7 @@ impl PyMerge {
             frames,
             clock,
             source,
-            by,
+            group,
             restart,
             restart_text,
             carry,
@@ -1313,7 +1313,7 @@ impl PyMerge {
 
     /// A merge that goes on from a saved state (`Merge::load_bytes`).
     #[staticmethod]
-    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
+    #[pyo3(signature = (state, names, frames, clock, source, group=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1321,7 +1321,7 @@ impl PyMerge {
         frames: Vec<PyDataFrame>,
         clock: String,
         source: String,
-        by: Option<String>,
+        group: Option<String>,
         restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
@@ -1331,7 +1331,7 @@ impl PyMerge {
             frames,
             clock,
             source,
-            by,
+            group,
             restart,
             restart_text,
             carry,

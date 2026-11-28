@@ -84,7 +84,7 @@ const TERMS: &str = r#""terms": {"m3": {"x": 3}, "kurt": {"x": 4}, "xy2": {"x": 
 fn specs() -> Vec<Spec> {
     vec![
         spec(&format!(
-            r#"{{"name": "ew", "model": {{"type": "ewm_moments", {TERMS}, "se": true}},
+            r#"{{"name": "ew", "model": {{"type": "ewm_moments", {TERMS}, "emit_se": true}},
                 "features": [], "clock": "t", "gap_cap": 5.0, "group": "g",
                 "weight": "w", "half_life": 20.0}}"#
         )),
@@ -289,11 +289,11 @@ fn the_banks_terms_are_the_models() {
     type Case = (&'static str, &'static str, fn(&mut EwmMomentsCfg));
     let cases: [Case; 2] = [
         (
-            r#""se": true"#,
+            r#""emit_se": true"#,
             r#""half_life": 20.0"#,
             |c: &mut EwmMomentsCfg| {
                 c.decay = Decay::Halflife(20.0);
-                c.se = true;
+                c.emit_se = true;
             },
         ),
         (
@@ -504,6 +504,6 @@ fn a_spec_it_cannot_read_is_refused_by_name() {
         &["weight_sum"],
     );
     // No `terms` at all is the parser's to name.
-    let e = check(&moments(r#""se": true"#, "")).unwrap_err();
+    let e = check(&moments(r#""emit_se": true"#, "")).unwrap_err();
     assert!(e.contains("missing field `terms`"), "{e}");
 }

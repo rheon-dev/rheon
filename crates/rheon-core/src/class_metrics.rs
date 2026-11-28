@@ -85,7 +85,7 @@ impl ReliabilityBins {
     /// bounded by `max_state_bytes` (default 256 KB, ceiling 64 MiB).
     pub fn new(n_bins: usize, max_state_bytes: Option<u64>) -> Result<Self, String> {
         if n_bins == 0 {
-            return Err("ReliabilityBins: n_bins must be at least 1, but it is 0. \
+            return Err("ReliabilityBins: bins must be at least 1, but it is 0. \
                  Pass a positive number of bins, such as 10."
                 .into());
         }
@@ -94,8 +94,8 @@ impl ReliabilityBins {
         let bytes = Self::max_bytes(n_bins);
         if bytes > cap {
             return Err(format!(
-                "ReliabilityBins: n_bins = {n_bins} holds {bytes} bytes, past max_state_bytes \
-                 of {cap}. Lower n_bins or raise max_state_bytes."
+                "ReliabilityBins: bins = {n_bins} holds {bytes} bytes, past max_state_bytes \
+                 of {cap}. Lower bins or raise max_state_bytes."
             ));
         }
         Ok(Self {
@@ -166,8 +166,8 @@ impl ReliabilityBins {
     pub fn merge(&mut self, other: &Self) -> Result<(), String> {
         if self.n_bins != other.n_bins {
             return Err(format!(
-                "ReliabilityBins: cannot merge states with different n_bins ({} vs {}). \
-                 Pass two states built with the same n_bins.",
+                "ReliabilityBins: cannot merge states with different bins ({} vs {}). \
+                 Pass two states built with the same bins.",
                 self.n_bins, other.n_bins
             ));
         }
@@ -333,7 +333,7 @@ impl ClassMetrics {
         max_state_bytes: Option<u64>,
     ) -> Result<Self, String> {
         if n_bins == 0 {
-            return Err("ClassMetrics: n_bins must be at least 1, but it is 0. \
+            return Err("ClassMetrics: bins must be at least 1, but it is 0. \
                  Pass a positive number of bins, such as 10."
                 .into());
         }
@@ -348,9 +348,9 @@ impl ClassMetrics {
         let bytes = Self::max_bytes(compression, n_bins);
         if bytes > cap {
             return Err(format!(
-                "ClassMetrics: compression = {compression} and n_bins = {n_bins} may hold up to \
+                "ClassMetrics: compression = {compression} and bins = {n_bins} may hold up to \
                  {bytes} bytes per key, past max_state_bytes of {cap}. Lower compression or \
-                 n_bins, or raise max_state_bytes."
+                 bins, or raise max_state_bytes."
             ));
         }
         let pos = TDigest::new(compression)?;
@@ -450,8 +450,8 @@ impl ClassMetrics {
     pub fn merge(&mut self, other: &Self) -> Result<(), String> {
         if self.n_bins() != other.n_bins() {
             return Err(format!(
-                "ClassMetrics: cannot merge states with different n_bins ({} vs {}). \
-                 Pass two states built with the same n_bins.",
+                "ClassMetrics: cannot merge states with different bins ({} vs {}). \
+                 Pass two states built with the same bins.",
                 self.n_bins(),
                 other.n_bins()
             ));

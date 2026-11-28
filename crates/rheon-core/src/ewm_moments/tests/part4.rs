@@ -79,7 +79,7 @@ fn run4(cfg: EwmMomentsCfg, rows: &[Row2]) -> Vec<(usize, String, f64)> {
     let clocked = cfg.clocked;
     let mut m = EwmMoments::new(cfg).unwrap();
     let mut names: Vec<String> = m.cfg.terms.iter().map(|t| t.name.clone()).collect();
-    if m.cfg.se {
+    if m.cfg.emit_se {
         let se: Vec<String> = names.iter().map(|n| format!("se_{n}")).collect();
         names.extend(se);
     }
@@ -174,7 +174,7 @@ fn windows_match_the_python_reference() {
 fn standard_errors_match_the_python_reference() {
     let rows = stream2(5542, &[0, 17, 40], None);
     let cfg = EwmMomentsCfg {
-        se: true,
+        emit_se: true,
         ..base(Decay::Lam(0.97), terms_of(SE_TERMS, true, ""))
     };
     let (worst, _) = against(REF_SE, &run4(cfg, &rows));
@@ -186,7 +186,7 @@ fn standard_errors_match_the_python_reference() {
 #[test]
 fn the_variances_standard_error_is_the_textbook_form() {
     let cfg = EwmMomentsCfg {
-        se: true,
+        emit_se: true,
         ..base(
             Decay::Lam(1.0),
             vec![MomentTerm::of_column("c2", 2, MomentKind::Central, true)],
@@ -354,9 +354,9 @@ fn forms() -> Vec<(&'static str, EwmMomentsCfg)> {
             },
         ),
         (
-            "se",
+            "emit_se",
             EwmMomentsCfg {
-                se: true,
+                emit_se: true,
                 ..ew.clone()
             },
         ),

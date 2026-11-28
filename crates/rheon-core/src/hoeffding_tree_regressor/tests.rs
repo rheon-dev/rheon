@@ -77,7 +77,7 @@ fn validation_refuses_bad_settings() {
     );
     assert!(
         HoeffdingTreeRegressor::new(HoeffdingTreeRegressorCfg {
-            min_samples_split: 0.5,
+            min_child_weight: 0.5,
             ..default_cfg(2, 1)
         })
         .is_err()
