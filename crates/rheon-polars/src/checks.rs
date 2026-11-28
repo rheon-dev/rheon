@@ -20,7 +20,7 @@
 
 use rheon_core::{
     Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, RobustSeType, Sandwich,
-    Specification, Tails, TwinFit,
+    Specification, Stamp, Tails, TwinFit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -275,15 +275,24 @@ impl Checks {
     pub fn new(spec: &Spec, n_slots: usize) -> Self {
         let on = |flag: bool, n: usize| if flag { n } else { 0 };
         let quantile = spec.quantile_level();
+        let cal_proto = match spec.calibration_clock_bandwidth() {
+            Some((bw, bw_ns)) => {
+                Calibration::with_clock_bandwidth(bw, bw_ns, spec.calibration_clock_per_slot_cap())
+            }
+            None => Calibration::with_lags(spec.nw_lags()),
+        };
+        let cov_proto = match spec.calibration_clock_bandwidth() {
+            Some((bw, bw_ns)) => Coverage::with_clock_bandwidth(
+                quantile.unwrap_or(0.5),
+                bw,
+                bw_ns,
+                spec.calibration_clock_per_slot_cap(),
+            ),
+            None => Coverage::new(quantile.unwrap_or(0.5), spec.nw_lags()),
+        };
         Self {
-            calibration: vec![
-                Calibration::with_lags(spec.nw_lags());
-                on(spec.emit_calibration && quantile.is_none(), n_slots)
-            ],
-            coverage: vec![
-                Coverage::new(quantile.unwrap_or(0.5), spec.nw_lags());
-                on(spec.emit_calibration && quantile.is_some(), n_slots)
-            ],
+            calibration: vec![cal_proto; on(spec.emit_calibration && quantile.is_none(), n_slots)],
+            coverage: vec![cov_proto; on(spec.emit_calibration && quantile.is_some(), n_slots)],
             breaks: vec![
                 Breaks::with_lags(spec.nw_lags()).with_indicator(quantile.is_some());
                 on(spec.emit_breaks, n_slots)
@@ -346,12 +355,18 @@ impl Checks {
     /// accumulators, each shaped to be read and folded.
     pub fn fits(&self, fresh: &Self, spec: &Spec) -> bool {
         let (k, lags, nw) = (spec.k(), spec.robust_se_lags_or_default(), spec.nw_lags());
+        let cal_clock = spec.calibration_clock_bandwidth();
+        let per_cap = spec.calibration_clock_per_slot_cap();
+        let q = spec.quantile_level().unwrap_or(0.5);
         self.calibration.len() == fresh.calibration.len()
             && self.coverage.len() == fresh.coverage.len()
-            && self
-                .coverage
-                .iter()
-                .all(|c| c.has_shape(spec.quantile_level().unwrap_or(0.5), nw))
+            && match cal_clock {
+                Some((bw, bw_ns)) => self
+                    .coverage
+                    .iter()
+                    .all(|c| c.has_shape_clock(q, bw, bw_ns, per_cap)),
+                None => self.coverage.iter().all(|c| c.has_shape(q, nw)),
+            }
             && self.breaks.len() == fresh.breaks.len()
             && self.twin.len() == fresh.twin.len()
             && self.sandwich.len() == fresh.sandwich.len()
@@ -370,7 +385,13 @@ impl Checks {
                     nw,
                 )
             })
-            && self.calibration.iter().all(|c| c.has_shape(nw))
+            && match cal_clock {
+                Some((bw, bw_ns)) => self
+                    .calibration
+                    .iter()
+                    .all(|c| c.has_shape_clock(bw, bw_ns, per_cap)),
+                None => self.calibration.iter().all(|c| c.has_shape(nw)),
+            }
             && self.breaks.iter().all(|b| b.has_shape(nw))
             && self.twin.iter().all(|t| t.has_shape(k))
             && {
@@ -588,37 +609,62 @@ impl Checks {
         }
     }
 
+    /// The first calibration or coverage accumulator whose clock-HAC ring a
+    /// row would have taken past its per-slot byte cap.
+    pub fn calibration_over_cap(&self) -> Option<(u64, u64)> {
+        self.calibration
+            .iter()
+            .find_map(Calibration::state_over_cap)
+            .or_else(|| self.coverage.iter().find_map(Coverage::state_over_cap))
+    }
+
     /// Fold one learned row: `row` and its recursive residuals `rec`, the
-    /// row's clock step and weight. A slot with no prediction or no target,
-    /// and a row of weight 0, only age (CLAUDE.md hard rule 9). Until the
-    /// instance is `ready` (task 232 (1)) a row's residuals only age the
+    /// row's clock step, stamp, and weight. A slot with no prediction or no
+    /// target, and a row of weight 0, only age (CLAUDE.md hard rule 9). Until
+    /// the instance is `ready` (task 232 (1)) a row's residuals only age the
     /// accumulators that read them; the twin fits and the feature health,
     /// which read the target and the features alone, fold it.
+    ///
+    /// Returns the first half-cap state warning raised by a clocked-embargo
+    /// calibration HAC accumulator on this row, if any.
+    #[allow(clippy::too_many_arguments)]
     pub fn learn(
         &mut self,
         cfg: &CheckCfg,
         d_clock: f64,
+        stamp: Option<Stamp>,
         row: &RowView<'_>,
         rec: &[f64],
         w: f64,
         ready: bool,
-    ) {
+    ) -> Option<(u64, u64)> {
         let nc = row.nc.max(1);
         // The weight the residuals fold at: none before the instance is
         // ready, which only ages them.
         let (wd, w) = (if ready { w } else { 0.0 }, w);
+        let mut cal_warn: Option<(u64, u64)> = None;
         if !self.calibration.is_empty() {
             let lam = cfg.calibration.factor(d_clock);
             for (slot, c) in self.calibration.iter_mut().enumerate() {
                 let y = row.ys.get(slot / nc).copied().flatten().unwrap_or(f64::NAN);
-                c.update(row.preds[slot], y, lam, wd);
+                c.update_at(row.preds[slot], y, lam, wd, d_clock, stamp);
+                if let Some(warn) = c.take_state_warning()
+                    && cal_warn.is_none()
+                {
+                    cal_warn = Some(warn);
+                }
             }
         }
         if !self.coverage.is_empty() {
             let lam = cfg.calibration.factor(d_clock);
             for (slot, c) in self.coverage.iter_mut().enumerate() {
                 let y = row.ys.get(slot / nc).copied().flatten().unwrap_or(f64::NAN);
-                c.update(row.preds[slot], y, lam, wd);
+                c.update_at(row.preds[slot], y, lam, wd, d_clock, stamp);
+                if let Some(warn) = c.take_state_warning()
+                    && cal_warn.is_none()
+                {
+                    cal_warn = Some(warn);
+                }
             }
         }
         if !self.breaks.is_empty() {
@@ -672,6 +718,7 @@ impl Checks {
                 );
             }
         }
+        cal_warn
     }
 }
 

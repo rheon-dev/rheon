@@ -242,3 +242,17 @@ pub(super) fn state_cap_notice(spec: &Spec, bytes: u64, cap: u64) -> String {
          {shorten}{raise}, to stay clear of it."
     )
 }
+
+/// Clocked-embargo `emit_calibration` HAC ring is past half of `max_state_bytes`.
+pub(super) fn calibration_cap_notice(spec: &Spec, bytes: u64, cap: u64) -> String {
+    let emb = spec
+        .embargo
+        .as_ref()
+        .map_or_else(|| "embargo".to_string(), |e| format!("embargo = {e}"));
+    format!(
+        "emit_calibration holds {bytes} bytes, past half of max_state_bytes ({cap}), and it \
+         grows with the residuals inside 2 * embargo ({emb}). At {cap} bytes the bank stops and \
+         refuses the run. Give horizon_rows, shorten embargo, or raise max_state_bytes, to stay \
+         clear of it."
+    )
+}

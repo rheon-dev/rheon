@@ -283,16 +283,80 @@ impl Spec {
         .collect()
     }
 
+    /// Clock-duration Newey-West Bartlett bandwidth `(B, B_ns)` for
+    /// `emit_calibration` when `clock` and `embargo` are set without explicit
+    /// `horizon_rows`: `B = 2 * embargo` in clock units (and exact nanoseconds
+    /// on temporal durations).
+    pub fn calibration_clock_bandwidth(&self) -> Option<(f64, Option<i128>)> {
+        if !self.emit_calibration
+            || self.model.predicts_no_target()
+            || self.clock.is_none()
+            || self.horizon_rows.is_some()
+        {
+            return None;
+        }
+        let emb = self.embargo.as_ref()?;
+        let v = emb.value();
+        if !(v.is_finite() && v > 0.0) {
+            return None;
+        }
+        let bw = 2.0 * v;
+        if !(bw.is_finite() && bw > 0.0) {
+            return None;
+        }
+        let bw_ns = match emb {
+            Span::Duration(d) => i128::from(d.nanos).checked_mul(2).filter(|&n| n > 0),
+            Span::Units(_) => None,
+        };
+        Some((bw, bw_ns))
+    }
+
+    /// Whether `emit_calibration` uses a clock-duration Newey-West Bartlett
+    /// kernel inferred from `embargo` rather than discrete row lags.
+    pub fn uses_calibration_clock_hac(&self) -> bool {
+        self.calibration_clock_bandwidth().is_some()
+    }
+
+    /// Group byte budget applied to clocked-embargo calibration HAC rings.
+    pub fn calibration_clock_cap_bytes(&self) -> u64 {
+        self.effective_max_state_bytes()
+            .unwrap_or(rheon_core::DEFAULT_STATE_BYTES)
+    }
+
+    /// Total `(instance, slot)` calibration accumulators in one group.
+    pub fn calibration_clock_slot_count(&self) -> u64 {
+        self.conformal_p_ring_count()
+    }
+
+    /// Per-slot byte budget for each clocked-embargo calibration HAC ring.
+    pub fn calibration_clock_per_slot_cap(&self) -> u64 {
+        let n_slots = self.calibration_clock_slot_count().max(1);
+        self.calibration_clock_cap_bytes() / n_slots
+    }
+
+    /// Fixed byte overhead of one clocked-embargo calibration HAC accumulator.
+    pub fn calibration_clock_fixed_bytes(&self) -> u64 {
+        if self.quantile_level().is_some() {
+            rheon_core::CLOCK_COVERAGE_HAC_FIXED_BYTES
+        } else {
+            rheon_core::CLOCK_HAC_FIXED_BYTES
+        }
+    }
+
     /// What a spec on a clock column with an `embargo` and no
     /// `horizon_rows` is told, once per diagnostic that reads the horizon
     /// (task 232 (3); review round 6, B-2, A-8, F-4, G-5): its horizon is
     /// 0, so a look-ahead target's overlapping residuals read as a fault.
+    /// `emit_calibration` infers a clock-duration Bartlett kernel over
+    /// `2 * embargo` directly and needs no notice.
     pub fn horizon_notices(&self) -> Vec<String> {
         if self.clock.is_none() || self.embargo.is_none() || self.horizon_rows.is_some() {
             return Vec::new();
         }
+        let cal_clock = self.uses_calibration_clock_hac();
         self.horizon_readers()
             .into_iter()
+            .filter(|(name, _)| !(cal_clock && *name == "emit_calibration"))
             .map(|(name, what)| {
                 format!(
                     "{name} reads the target's horizon -- the rows a look-ahead target's \
@@ -360,7 +424,9 @@ impl Spec {
     /// Whether this spec carries a bounded diagnostic state that reads the
     /// top-level `max_state_bytes` cap.
     pub fn has_diagnostic_state_cap(&self) -> bool {
-        self.emit_conformal_p || (self.emit_robust_se && self.has_robust_se())
+        self.emit_conformal_p
+            || (self.emit_robust_se && self.has_robust_se())
+            || self.uses_calibration_clock_hac()
     }
 
     /// Effective `max_state_bytes` for a model configuration: model-block value
@@ -588,6 +654,27 @@ impl Spec {
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    /// Validate the fixed-size floor of clocked-embargo calibration HAC rings
+    /// against `max_state_bytes`.
+    pub(super) fn check_calibration_clock_hac(&self, no: &mut rheon_core::Refusals) {
+        if !self.uses_calibration_clock_hac() {
+            return;
+        }
+        let cap = self.calibration_clock_cap_bytes();
+        if cap > 0 && cap <= rheon_core::STATE_BYTES_CEILING {
+            let n_slots = self.calibration_clock_slot_count().max(1);
+            let fixed = n_slots.saturating_mul(self.calibration_clock_fixed_bytes());
+            if fixed > cap {
+                no.refuse(format!(
+                    "spec {:?}: emit_calibration with a clocked embargo holds {fixed} fixed bytes \
+                     a group across {n_slots} slot(s), past max_state_bytes of {cap}. Give \
+                     horizon_rows, or raise max_state_bytes (at most 64 MiB).",
+                    self.name
+                ));
             }
         }
     }

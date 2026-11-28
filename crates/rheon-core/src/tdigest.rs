@@ -194,6 +194,43 @@ impl TDigest {
         &self.centroids
     }
 
+    /// Exact buffered points when no merge has happened yet (`centroids` is
+    /// empty); `None` once the first merge pass has run.
+    pub(crate) fn exact_points(&self) -> Option<&[(f64, f64)]> {
+        self.centroids.is_empty().then_some(self.buffer.as_slice())
+    }
+
+    /// Fold another digest at the same compression into `self`.
+    pub(crate) fn merge_from(&mut self, other: &Self) -> Result<(), String> {
+        if self.compression.to_bits() != other.compression.to_bits() {
+            return Err(format!(
+                "TDigest: cannot merge digests with different compressions ({} vs {}). \
+                 Pass two digests built with the same compression.",
+                self.compression, other.compression
+            ));
+        }
+        if other.centroids.is_empty() && other.buffer.is_empty() {
+            return Ok(());
+        }
+        self.lo = self.lo.min(other.lo);
+        self.hi = self.hi.max(other.hi);
+        if self.centroids.is_empty()
+            && other.centroids.is_empty()
+            && self.buffer.len() + other.buffer.len() < self.buffer_cap()
+        {
+            self.buffer.extend_from_slice(&other.buffer);
+            return Ok(());
+        }
+        let mut fresh =
+            Vec::with_capacity(self.buffer.len() + other.centroids.len() + other.buffer.len());
+        fresh.extend_from_slice(&self.buffer);
+        fresh.extend_from_slice(&other.centroids);
+        fresh.extend_from_slice(&other.buffer);
+        self.centroids = self.merged(&mut fresh);
+        self.buffer.clear();
+        Ok(())
+    }
+
     /// One row `x` of weight `w`; a weight of 0, one that is not a positive
     /// finite number, or a value that is not finite, is not seen.
     pub fn update(&mut self, x: f64, w: f64) {

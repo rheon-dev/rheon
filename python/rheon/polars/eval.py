@@ -126,6 +126,12 @@ from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._renamed import renamed_function, renamed_keywords
 from rheon.polars._clock import clock_nanoseconds
 from rheon.polars._errors import ColumnNotFoundError, OutputColumnNotFoundError
+from rheon.polars._eval_classification import (
+    compute_classification_metrics as _compute_classification_metrics,
+)
+from rheon.polars._eval_classification import (
+    compute_reliability_bins as _compute_reliability_bins,
+)
 from rheon.polars._eval_intervals import (
     check_bool_flag as _check_bool_flag,
 )
@@ -146,6 +152,8 @@ __all__ = [
     "metrics",
     "window_metrics",
     "interval_metrics",
+    "classification_metrics",
+    "reliability_bins",
     "compare_specs",
     "grid_search",
     "unpack",
@@ -1547,6 +1555,227 @@ def interval_metrics(
         kept_fn=_kept,
         slots_fn=_slots,
         weighed_fn=_weighed,
+    )
+
+
+@renamed_keywords("rp.eval.classification_metrics", _BOTH)
+@_takes_spec("rp.eval.classification_metrics", lazy=True)
+def classification_metrics(
+    df: pl.DataFrame | pl.LazyFrame,
+    spec: str | dict | None = None,
+    *,
+    pred: str | None = None,
+    target: str | None = None,
+    group: str | Iterable[str] | None = None,
+    targets: Sequence[str] | None = None,
+    weight: str | None = None,
+    min_samples: int = 30,
+    n_bins: int = 10,
+    compression: float = 200.0,
+    max_state_bytes: int | None = None,
+    chunk_size: int | None = None,
+) -> pl.DataFrame:
+    r"""Streaming binary classification metrics: ROC-AUC, PR-AUC, ECE, MCE, and Brier.
+
+    Accumulates two per-class merging t-digests (positive and negative scores)
+    and exact uniform probability bins in bounded memory per key, reading a
+    ``LazyFrame`` one chunk at a time.
+
+    .. rubric:: Parameters
+
+    ``df``
+        A ``DataFrame`` or ``LazyFrame`` holding either a bank spec's output
+        column or plain ``pred`` and ``target`` columns.
+    ``spec``
+        Optional spec dict or spec name (scores every ``pred_*`` slot of that
+        spec). Leave ``None`` and pass ``pred`` and ``target`` to score plain
+        columns directly.
+    ``pred``
+        Name of the numeric predicted-score column when ``spec`` is ``None``.
+    ``target``
+        Name of the binary ``0``/``1`` (or boolean) target column when ``spec``
+        is ``None``.
+    ``group``
+        Optional key column name or sequence of column names.
+    ``targets``
+        Optional target column names when ``spec`` is a bare name.
+    ``weight``
+        Optional non-negative weight column. Rows with zero, null, non-finite,
+        or negative weight are skipped cleanly.
+    ``min_samples``
+        Minimum usable positive-weight rows per key to report derived scores
+        (default 30). Keys below ``min_samples`` keep counts and null scores.
+    ``n_bins``
+        Number of uniform reliability bins over ``[0, 1]`` for ECE and MCE
+        (default 10; must be at least 1).
+    ``compression``
+        Merging t-digest compression parameter per class (default 200.0; must
+        be finite and at least 10.0).
+    ``max_state_bytes``
+        Optional per-key byte budget (default 262,144; ceiling 64 MiB).
+    ``chunk_size``
+        Optional batch height when streaming chunks.
+
+    .. rubric:: Returns
+
+    A ``DataFrame`` sorted by keys (``slot``, ``target``, and ``group`` in spec
+    mode; ``group`` in plain-column mode) with columns ``n``, ``n_pos``,
+    ``n_neg``, ``weight_sum``, ``pos_rate``, ``roc_auc``, ``pr_auc``, ``ece``,
+    ``mce``, and ``brier``. ``roc_auc`` and ``pr_auc`` are null when either
+    class has zero weight.
+
+    .. rubric:: Raises
+
+    ``ValueError``
+        Invalid mode combination, non-binary target values on positive-weight
+        rows, invalid ``n_bins``, ``compression``, ``max_state_bytes``,
+        ``min_samples``, or ``chunk_size``, or colliding column names.
+    :class:`~rheon.WrongTypeError`
+        An argument or column has an incompatible type.
+    :class:`~rheon.ColumnNotFoundError`
+        A ``pred``, ``target``, ``group``, or ``weight`` column is missing.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"])
+        out = rp.ModelBank([spec]).fit_predict(df)
+        scores = rp.eval.classification_metrics(out, spec, n_bins=10)
+
+    .. rubric:: See also
+
+    - :func:`reliability_bins`, the exact per-bin calibration table behind
+      ``ece`` and ``mce``.
+    - :func:`metrics`, point-prediction scores including ``log_loss`` and
+      ``brier_skill``.
+
+    .. rubric:: Notes
+
+    ``roc_auc`` integrates :math:`P(S_+ > S_-) + \frac{1}{2} P(S_+ = S_-)` over
+    the positive and negative centroid distributions. ``pr_auc`` computes
+    Average Precision :math:`\sum_k (R_k - R_{k-1}) P_k` stepping from the
+    highest score centroid downward. ``ece`` and ``mce`` are exact over
+    ``n_bins`` uniform bins on ``[0, 1]`` with probabilities clipped to
+    ``[0, 1]``; ``brier`` is the exact weighted mean squared error
+    :math:`\frac{1}{W} \sum_i w_i (p_i - y_i)^2`. Results are bit-for-bit
+    identical across chunk sizes on both ``DataFrame`` and ``LazyFrame``.
+    """
+    return _compute_classification_metrics(
+        df,
+        spec,
+        pred=pred,
+        target=target,
+        group=group,
+        targets=targets,
+        weight=weight,
+        min_samples=min_samples,
+        n_bins=n_bins,
+        compression=compression,
+        max_state_bytes=max_state_bytes,
+        chunk_size=chunk_size,
+        probe_fn=_probe,
+        check_min_samples_fn=_check_min_samples,
+        check_columns_fn=_check_columns,
+        group_keys_fn=_group_keys,
+        slots_fn=_slots,
+    )
+
+
+@renamed_keywords("rp.eval.reliability_bins", _GROUP)
+@_takes_spec("rp.eval.reliability_bins", lazy=True)
+def reliability_bins(
+    df: pl.DataFrame | pl.LazyFrame,
+    spec: str | dict | None = None,
+    *,
+    pred: str | None = None,
+    target: str | None = None,
+    group: str | Iterable[str] | None = None,
+    targets: Sequence[str] | None = None,
+    weight: str | None = None,
+    n_bins: int = 10,
+    chunk_size: int | None = None,
+) -> pl.DataFrame:
+    r"""Exact uniform-bin reliability diagram table for binary probabilities.
+
+    Streams ``df`` in bounded memory without building t-digests and returns
+    one row per ``(key, bin)`` across ``n_bins`` uniform intervals on
+    ``[0, 1]``.
+
+    .. rubric:: Parameters
+
+    ``df``
+        A ``DataFrame`` or ``LazyFrame`` holding either a bank spec's output
+        column or plain ``pred`` and ``target`` columns.
+    ``spec``
+        Optional spec dict or spec name. Leave ``None`` and pass ``pred`` and
+        ``target`` to score plain columns directly.
+    ``pred``
+        Name of the numeric predicted-probability column when ``spec`` is
+        ``None``.
+    ``target``
+        Name of the binary ``0``/``1`` (or boolean) target column when ``spec``
+        is ``None``.
+    ``group``
+        Optional key column name or sequence of column names.
+    ``targets``
+        Optional target column names when ``spec`` is a bare name.
+    ``weight``
+        Optional non-negative weight column. Rows with zero, null, non-finite,
+        or negative weight are skipped cleanly.
+    ``n_bins``
+        Number of uniform bins over ``[0, 1]`` (default 10; must be at least 1).
+    ``chunk_size``
+        Optional batch height when streaming chunks.
+
+    .. rubric:: Returns
+
+    A ``DataFrame`` sorted by keys and ``bin`` with columns ``bin``,
+    ``bin_lo``, ``bin_hi``, ``n``, ``weight_sum``, ``mean_pred``,
+    ``mean_actual``, and ``abs_gap``. Empty bins keep ``n = 0``,
+    ``weight_sum = 0.0``, and null means and gap.
+
+    .. rubric:: Raises
+
+    ``ValueError``
+        Invalid mode combination, non-binary target values on positive-weight
+        rows, ``n_bins < 1``, ``chunk_size < 1``, or colliding column names.
+    :class:`~rheon.WrongTypeError`
+        An argument or column has an incompatible type.
+    :class:`~rheon.ColumnNotFoundError`
+        A ``pred``, ``target``, ``group``, or ``weight`` column is missing.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        bins = rp.eval.reliability_bins(out, spec, n_bins=10)
+
+    .. rubric:: See also
+
+    - :func:`classification_metrics`, which aggregates these bins into ``ece``
+      and ``mce`` alongside ``roc_auc``, ``pr_auc``, and ``brier``.
+
+    .. rubric:: Notes
+
+    Each probability is clipped to ``[0, 1]`` and assigned to bin
+    :math:`b = \min(\lfloor p \cdot B \rfloor, B - 1)`. Results are bit-for-bit
+    identical across chunk sizes on both ``DataFrame`` and ``LazyFrame``.
+    """
+    return _compute_reliability_bins(
+        df,
+        spec,
+        pred=pred,
+        target=target,
+        group=group,
+        targets=targets,
+        weight=weight,
+        n_bins=n_bins,
+        chunk_size=chunk_size,
+        probe_fn=_probe,
+        check_columns_fn=_check_columns,
+        group_keys_fn=_group_keys,
+        slots_fn=_slots,
     )
 
 

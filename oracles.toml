@@ -7732,6 +7732,71 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."classification_metrics.continuous_stream"]
+tests = [
+    "tests/test_classification_metrics.py::test_fifty_seeds_continuous_10k_stream_vs_sklearn",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[group."classification_metrics.discrete_exact"]
+tests = [
+    "tests/test_classification_metrics.py::test_fifty_seeds_discrete_exact_vs_sklearn",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."classification_metrics.continuous_stream.balanced_pr_auc_err"]
+ideal = 0.0
+n = 50
+
+[case."classification_metrics.continuous_stream.balanced_roc_auc_err"]
+ideal = 0.0
+n = 50
+
+[case."classification_metrics.continuous_stream.brier_err"]
+ideal = 0.0
+n = 100
+floor = 1e-12
+
+[case."classification_metrics.continuous_stream.ece_err"]
+ideal = 0.0
+n = 100
+floor = 1e-12
+
+[case."classification_metrics.continuous_stream.imbalanced_pr_auc_err"]
+ideal = 0.0
+n = 50
+
+[case."classification_metrics.continuous_stream.imbalanced_roc_auc_err"]
+ideal = 0.0
+n = 50
+
+[case."classification_metrics.discrete_exact.brier_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."classification_metrics.discrete_exact.ece_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."classification_metrics.discrete_exact.mce_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."classification_metrics.discrete_exact.pr_auc_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."classification_metrics.discrete_exact.roc_auc_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

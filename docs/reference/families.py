@@ -213,6 +213,8 @@ FAMILIES: tuple[Family, ...] = (
                 "metrics",
                 "window_metrics",
                 "interval_metrics",
+                "classification_metrics",
+                "reliability_bins",
                 "sums",
                 "merge_sums",
                 "from_sums",

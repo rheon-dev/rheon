@@ -74,7 +74,10 @@ const KINDS: &[(&str, &str, &str)] = &[
     (
         "ewridge",
         r#"{"type": "ewridge"}"#,
-        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": [20.0, 50.0], "weight": "w", "min_weight": 3.0, "conformal": 0.9, "emit_sigma": true, "emit_zscore": true, "emit_metrics": true, "emit_drift": true, "drift_threshold": 20.0, "emit_calibration": true, "emit_autocorr": true, "resid_quantiles": [0.5, 0.9], "emit_clocks": true, "emit_selected": true, "emit_breaks": true, "emit_tails": true, "emit_influence": true"#,
+        // Explicit `horizon_rows: 0`: without it, clocked `embargo` infers a
+        // clock-duration Bartlett HAC over `2 * embargo` for `emit_calibration`,
+        // whereas `label_clock` carries per-row delays with no fixed embargo.
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": [20.0, 50.0], "weight": "w", "min_weight": 3.0, "conformal": 0.9, "emit_sigma": true, "emit_zscore": true, "emit_metrics": true, "emit_drift": true, "drift_threshold": 20.0, "emit_calibration": true, "horizon_rows": 0, "emit_autocorr": true, "resid_quantiles": [0.5, 0.9], "emit_clocks": true, "emit_selected": true, "emit_breaks": true, "emit_tails": true, "emit_influence": true"#,
     ),
     (
         "ewridge_windowed",

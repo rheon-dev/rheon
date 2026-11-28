@@ -2,6 +2,7 @@
 //! (Python dicts are serialized by the thin wrapper in
 //! `python/rheon/`), and frames cross on the Arrow C Data Interface.
 
+mod class_metrics;
 mod gbdt;
 mod gramfit;
 
@@ -2109,6 +2110,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMerge>()?;
     m.add_class::<PyWindows>()?;
     m.add_class::<PyBars>()?;
+    m.add_class::<class_metrics::PyClassMetrics>()?;
     gbdt::register(m)?;
     m.add_function(wrap_pyfunction!(gramfit::gram_lars_paths, m)?)?;
     m.add_function(wrap_pyfunction!(gramfit::gram_cd_path, m)?)?;

@@ -4070,6 +4070,7 @@ impl Spec {
         }
         self.check_robust_se(no, predicts);
         self.check_max_state_bytes(no);
+        self.check_calibration_clock_hac(no);
         // The residual checks whose null a fit fails by construction. An
         // expectile at a level other than one half is not the mean: its
         // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9

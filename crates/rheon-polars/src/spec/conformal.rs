@@ -192,8 +192,8 @@ impl Spec {
     }
 
     /// Number of `(instance, slot)` rings this spec builds under
-    /// `emit_conformal_p`.
-    fn conformal_p_ring_count(&self) -> u64 {
+    /// `emit_conformal_p` (and `emit_calibration` per-slot accumulators).
+    pub(super) fn conformal_p_ring_count(&self) -> u64 {
         let n_models = self.decays().map_or(1, |d| d.len()).max(1);
         let nc = match &self.model {
             ModelKind::EwRidge {
@@ -348,15 +348,16 @@ impl Spec {
         // Range check when no model-level cap validator runs (models with
         // their own max_state_bytes run their own cap range check via
         // effective_max_state_bytes, except sgd without loss="huber" and
-        // kalman without smooth_lag when emit_conformal_p is on).
+        // kalman without smooth_lag when a diagnostic state cap is on).
+        let diag_cap = self.emit_conformal_p || self.uses_calibration_clock_hac();
         let model_checks_cap = self.model.takes_model_max_state_bytes()
             && !matches!(
                 &self.model,
-                ModelKind::Sgd { loss, .. } if loss.as_deref() != Some("huber") && self.emit_conformal_p
+                ModelKind::Sgd { loss, .. } if loss.as_deref() != Some("huber") && diag_cap
             )
             && !matches!(
                 &self.model,
-                ModelKind::Kalman { smooth_lag: None, .. } if self.emit_conformal_p
+                ModelKind::Kalman { smooth_lag: None, .. } if diag_cap
             );
         if let Some(cap) = self.max_state_bytes
             && !model_checks_cap
