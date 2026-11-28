@@ -8,7 +8,9 @@ import math
 import numpy as np
 import polars as pl
 import pytest
+from scipy.stats import rankdata
 
+from polars_version import INSTALLED
 from rheon import polars as rp
 
 TIER = "essential"
@@ -76,8 +78,9 @@ def test_rolling_quantile_matches_polars_bit_exact(interpolation, closed):
 @pytest.mark.parametrize("method", ["average", "min", "max", "dense"])
 @pytest.mark.parametrize("closed", ["right", "both"])
 def test_rolling_rank_matches_polars_bit_exact(method, closed):
-    """``rp.ops.rolling_rank`` matches Polars ``rolling_rank_by`` across all 4
-    deterministic methods, including ties, -0.0/+0.0, and duplicate timestamps."""
+    """``rp.ops.rolling_rank`` matches Polars ``rolling_rank_by`` and
+    ``scipy.stats.rankdata`` across all 4 deterministic methods, including
+    ties, -0.0/+0.0, and duplicate timestamps."""
     rng = np.random.default_rng(73)
     n = 140
     t = np.cumsum(rng.integers(0, 3, size=n)).astype(np.int64)
@@ -86,17 +89,45 @@ def test_rolling_rank_matches_polars_bit_exact(method, closed):
     x[15] = -0.0
     df = pl.DataFrame({"t": t, "x": x})
     w = 10
-    want = df.select(
-        pl.col("x")
-        .rolling_rank_by("t", window_size=f"{w}i", method=method, closed=closed)
-        .cast(pl.Float64)
-        .alias("rk")
-    )["rk"]
     op = rp.ops.rolling_rank(
         pl.col("x"), window_size=w, method=method, closed=closed, min_samples=1
     ).alias("rk")
     got = rp.stream.with_windows(df.lazy(), op, clock="t", gap_cap=100).collect()["rk"]
-    assert got.equals(want), (method, closed)
+
+    # Independent scipy.stats.rankdata oracle (runs on every Polars version,
+    # including 1.37.0 where Polars' rolling_rank_by mishandled duplicate stamps).
+    want_scipy: list[float] = []
+    for i in range(n):
+        ti = t[i]
+        lo = ti - w
+        mask = (t >= lo) & (t <= ti) if closed == "both" else (t > lo) & (t <= ti)
+        idx = np.flatnonzero(mask)
+        ranks = rankdata(x[idx], method=method)
+        pos = int(np.flatnonzero(idx == i)[0])
+        want_scipy.append(float(ranks[pos]))
+    assert got.equals(pl.Series("rk", want_scipy, dtype=pl.Float64)), (method, closed)
+
+    if INSTALLED >= (2, 0, 0):
+        want = df.select(
+            pl.col("x")
+            .rolling_rank_by("t", window_size=f"{w}i", method=method, closed=closed)
+            .cast(pl.Float64)
+            .alias("rk")
+        )["rk"]
+        assert got.equals(want), (method, closed)
+    else:
+        # On py-polars 1.x (< 2.0), verify bit-exact parity with Polars'
+        # rolling_rank_by on strictly increasing timestamps where it agrees.
+        t_strict = np.cumsum(rng.integers(1, 4, size=n)).astype(np.int64)
+        df_s = pl.DataFrame({"t": t_strict, "x": x})
+        want_s = df_s.select(
+            pl.col("x")
+            .rolling_rank_by("t", window_size=f"{w}i", method=method, closed=closed)
+            .cast(pl.Float64)
+            .alias("rk")
+        )["rk"]
+        got_s = rp.stream.with_windows(df_s.lazy(), op, clock="t", gap_cap=100).collect()["rk"]
+        assert got_s.equals(want_s), (method, closed)
 
 
 def test_rolling_quantile_and_rank_forward_windows_and_refusals():

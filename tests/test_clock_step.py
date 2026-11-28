@@ -18,6 +18,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from polars_version import INSTALLED
 from rheon import polars as rp
 
 TIER = "essential"
@@ -66,12 +67,17 @@ def test_the_steps_statistics_are_polars_ewm_of_diff(
     got = rp.stream.with_windows(s.to_frame(), v=op)["v"].to_list()
     want = _polars(s, stat, half_life, bias)
     formed = s.diff().is_not_null().to_list()
+    first_formed = formed.index(True)
     compared = 0
     for i, (g, w) in enumerate(zip(got, want, strict=True)):
         if s[i] is None:
             assert g is None, i
         elif not formed[i]:
             continue  # no step here: Polars gives null, the operator what stands
+        elif i == first_formed and not bias and stat != "mean" and INSTALLED < (1, 44, 1):
+            # Polars' ewm_var/ewm_std(bias=False) returned 0.0 instead of null
+            # on the first non-null observation before 1.44 (tests/test_windows.py).
+            assert g is None, i
         elif w is None or np.isnan(w):
             assert g is None, i  # both withhold: one step carries the weight
         else:

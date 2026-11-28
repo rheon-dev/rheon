@@ -34,6 +34,7 @@ from typing import Any
 import polars as pl
 import pytest
 
+from polars_version import INSTALLED
 from rheon import polars as rp
 
 TIER = "essential"
@@ -121,7 +122,10 @@ def test_reverse_window_membership_is_the_reports_table_and_polars(closed: str, 
     assert sum(passed) >= 2
     for i, ok in enumerate(passed):
         if ok:
-            assert want[i] == polars[i], (closed, w, i)
+            # Polars' rolling_sum_by returned None instead of 0 for an empty
+            # window before 1.41.1 (tests/test_windows.py: NEEDS_ROLLING_NULLS).
+            ref = 0 if polars[i] is None and INSTALLED < (1, 41, 1) else polars[i]
+            assert want[i] == ref, (closed, w, i)
             assert got[i] == want[i], (closed, w, i, got)
 
 

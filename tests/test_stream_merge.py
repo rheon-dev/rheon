@@ -441,7 +441,7 @@ def test_restart_after_step_back_is_exact_past_104_days_and_2_to_53():
     # (inclusive), not restarted because float(105d1ns) rounded down to 105d.
     a = pl.DataFrame({"t": pl.Series([t0, t0 - (ns_105d + 1)], dtype=pl.Datetime("ns"))})
     b = pl.DataFrame({"t": pl.Series([t0], dtype=pl.Datetime("ns"))})
-    with pytest.raises(ValueError, match="steps back"):
+    with pytest.raises(_REFUSAL, match="steps back"):
         rp.stream.merge(a, b, clock="t", restart_after_step_back="105d1ns")
     # Step back of 105d2ns with threshold "105d1ns": strictly past -> restarts.
     a_restart = pl.DataFrame({"t": pl.Series([t0, t0 - (ns_105d + 2)], dtype=pl.Datetime("ns"))})
@@ -460,11 +460,11 @@ def test_restart_after_step_back_is_exact_past_104_days_and_2_to_53():
     ai_eq = pl.DataFrame({"t": pl.Series([big + 10, 10], dtype=pl.Int64)})
     ai_gt = pl.DataFrame({"t": pl.Series([big + 10, 9], dtype=pl.Int64)})
     bi = pl.DataFrame({"t": pl.Series([big + 10], dtype=pl.Int64)})
-    with pytest.raises(ValueError, match="steps back"):
+    with pytest.raises(_REFUSAL, match="steps back"):
         rp.stream.merge(ai_eq, bi, clock="t", restart_after_step_back=big)
     assert rp.stream.merge(ai_gt, bi, clock="t", restart_after_step_back=big).height == 3
     # Huge integer (10**400): refuses any finite step back instead of OverflowError.
-    with pytest.raises(ValueError, match="steps back"):
+    with pytest.raises(_REFUSAL, match="steps back"):
         rp.stream.merge(ai_gt, bi, clock="t", restart_after_step_back=10**400)
     # And succeeds on sorted inputs with 10**400.
     ok_i = pl.DataFrame({"t": pl.Series([1, 2], dtype=pl.Int64)})
