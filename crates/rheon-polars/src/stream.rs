@@ -1053,6 +1053,9 @@ pub struct Stream {
     check_cfgs: Vec<CheckCfg>,
     /// Deterministic Philox group coordinate for rebuilds/resets.
     group_hash: u64,
+    /// Stale rows skipped under `on_step_back = "skip"` in the current chunk
+    /// (transient; drained into a single per-spec summary notice at chunk end).
+    skipped_step_back_chunk: u64,
 }
 
 /// Which bounded-state subsystem hit `max_state_bytes` on a row.
@@ -1365,6 +1368,18 @@ impl Stream {
         self.persisted.summary.as_ref()
     }
 
+    /// Stale rows skipped under `on_step_back = "skip"` during this chunk,
+    /// resetting the transient counter to zero.
+    pub fn take_skipped_step_back(&mut self) -> u64 {
+        std::mem::take(&mut self.skipped_step_back_chunk)
+    }
+
+    /// Carry skipped stale-row count from a closed session span onto the new
+    /// span's stream so the chunk's summary notice includes it.
+    pub fn carry_skipped_step_back(&mut self, count: u64) {
+        self.skipped_step_back_chunk = self.skipped_step_back_chunk.saturating_add(count);
+    }
+
     /// Keep the last learned row of a run's buffers as [`Self::last_row`]:
     /// the last row `processed` marks, so a chunk that ends in skipped rows
     /// keeps the row before them. A run with no learned row changes nothing.
@@ -1412,6 +1427,47 @@ pub fn last_accepted(
     (base..base + n)
         .rev()
         .find(|&i| features.usable_at(i) && weight.map(|w| counts(w[i])).unwrap_or(true))
+}
+
+/// [`last_accepted`] aware of `on_step_back = "skip"`: skips stale rows whose
+/// clock stepped backward so `coef` still lands on the true last accepted row
+/// of the chunk. Delegates directly to [`last_accepted`] under `"error"`.
+#[allow(clippy::too_many_arguments)]
+pub fn last_accepted_for_chunk(
+    stream: &Stream,
+    cfg: &rheon_core::ClockCfg,
+    features: &FeatureCols,
+    clock: Option<&ClockCol>,
+    session: Option<&[u64]>,
+    weight: Option<&[f64]>,
+    session_bounds: &[usize],
+    base: usize,
+    n: usize,
+) -> Option<usize> {
+    if !cfg.on_clock_reset.skips() {
+        return last_accepted(features, weight, base, n);
+    }
+    let mut state = stream.persisted.clock.clone();
+    let mut next_bound = 0usize;
+    let mut last = None;
+    for ri in 0..n {
+        if session_bounds.get(next_bound) == Some(&ri) {
+            state = ClockState::new();
+            next_bound += 1;
+        }
+        let i = base + ri;
+        if weight.is_some_and(|w| w[i] == 0.0) {
+            continue;
+        }
+        let adv = state.advance(cfg, clock.map(|c| c.at(i)), session.map(|s| s[i]), true);
+        if !adv.skipped_step_back
+            && features.usable_at(i)
+            && weight.map(|w| counts(w[i])).unwrap_or(true)
+        {
+            last = Some(i);
+        }
+    }
+    last
 }
 
 /// A usable weight other than 0: a row of weight 0 is scored and counts in
@@ -1567,6 +1623,7 @@ impl Stream {
             exact_caps: spec.exact_caps(),
             check_cfgs,
             group_hash,
+            skipped_step_back_chunk: 0,
         })
         .inspect(|stream| {
             // The bank replays only the rings of a spec that says it keeps
@@ -2006,6 +2063,7 @@ impl Stream {
         &self,
         cfg: &rheon_core::ClockCfg,
         clock: Option<&ClockCol>,
+        session: Option<&[u64]>,
         weight: Option<&[f64]>,
         rows: &[usize],
         base: usize,
@@ -2017,16 +2075,19 @@ impl Stream {
             Some(ClockValue::F64(p)) => Some(p),
             _ => None,
         };
+        let mut prev_session = self.persisted.clock.prev_session();
         let (removed, elapsed_removed) = self.persisted.clock.removed_times();
         let mut bound = removed.abs().max(elapsed_removed.abs());
-        let session = match cfg.session_gap {
+        let session_gap = match cfg.session_gap {
             Some(rheon_core::SessionGap::Gap(g)) => Some(g.abs()),
             Some(rheon_core::SessionGap::Reset) => Some(0.0),
             None => None,
         };
+        let skips = cfg.on_clock_reset.skips();
         for (ri, &row) in rows.iter().enumerate() {
             let at = base + ri;
             let now = values[at];
+            let now_session = session.map(|s| s[at]);
             let zero = weight.is_some_and(|w| w[at] == 0.0);
             if let Some(p) = prev {
                 let step = now - p;
@@ -2043,7 +2104,20 @@ impl Stream {
                 if zero {
                     continue;
                 }
-                bound += match session {
+                let session_changed =
+                    matches!((now_session, prev_session), (Some(s), Some(q)) if s != q);
+                // Under `on_step_back = "skip"`, a finite within-session step
+                // back that is skipped touches neither the watermark nor the
+                // removed-time bound.
+                if skips
+                    && !session_changed
+                    && step < 0.0
+                    && (matches!(cfg.on_clock_reset, rheon_core::OnClockReset::Skip)
+                        || -step <= cfg.min_backwards_jump)
+                {
+                    continue;
+                }
+                bound += match session_gap {
                     Some(g) => step.abs() + g,
                     None if step < 0.0 => -step,
                     None => (step - cfg.gap_cap).max(0.0),
@@ -2059,6 +2133,7 @@ impl Stream {
             }
             if !zero {
                 prev = Some(now);
+                prev_session = now_session;
             }
         }
         Ok(())
@@ -2093,7 +2168,8 @@ impl Stream {
             return Ok(());
         };
         let can_refuse = matches!(cfg.on_clock_reset, rheon_core::OnClockReset::Error)
-            || cfg.min_backwards_jump > 0.0;
+            || (matches!(cfg.on_clock_reset, rheon_core::OnClockReset::ResetState)
+                && cfg.min_backwards_jump > 0.0);
         if !can_refuse {
             return Ok(());
         }
@@ -2155,6 +2231,7 @@ impl Stream {
         let fresh_steps = self.resets_on_drift(spec);
         let mut rows_seen = self.persisted.rows_seen;
         let mut fed = self.persisted.fed;
+        let mut skipped_step_back = 0u64;
         let coef_plan = CoefPlan::of(spec);
         let mut coef_cadence = self.persisted.coef_cadence;
         plans.reserve(n_rows);
@@ -2176,6 +2253,47 @@ impl Stream {
             // planned on copies of the clock and left out of everything the
             // schedule counts ([`Self::weightless_plan`]).
             if w == Some(0.0) {
+                if cfg.on_clock_reset.skips() {
+                    let probe = clock_state.clone().advance_stamped(
+                        cfg,
+                        &self.exact_caps,
+                        c,
+                        session.map(|s| s[i]),
+                        accept,
+                    );
+                    if probe.skipped_step_back {
+                        skipped_step_back = skipped_step_back.saturating_add(1);
+                        plans.push(RowPlan {
+                            ri,
+                            i,
+                            pending: usize::MAX,
+                            d_clock: 0.0,
+                            d_fresh: 0.0,
+                            elapsed_step: 0.0,
+                            stamp: None,
+                            clock: c,
+                            reset: false,
+                            blend: false,
+                            session_changed: false,
+                            backwards: true,
+                            stale: true,
+                            capped: false,
+                            accept: false,
+                            want_coef: false,
+                            emit: false,
+                            drift_ri: ri,
+                            learn: false,
+                            buffered: false,
+                            parks: false,
+                            w: 0.0,
+                            zero: Weightless::No,
+                        });
+                        if keep_elapsed {
+                            elapsed.push(None);
+                        }
+                        continue;
+                    }
+                }
                 let plan = self.weightless_plan(
                     spec,
                     cfg,
@@ -2212,6 +2330,38 @@ impl Stream {
             // row and column.
             if let Some(raw) = adv.backwards {
                 return Err(ClockRefusal::new(raw, row, adv.disorder, c, prev));
+            }
+            if adv.skipped_step_back {
+                skipped_step_back = skipped_step_back.saturating_add(1);
+                plans.push(RowPlan {
+                    ri,
+                    i,
+                    pending: usize::MAX,
+                    d_clock: 0.0,
+                    d_fresh: 0.0,
+                    elapsed_step: 0.0,
+                    stamp: None,
+                    clock: c,
+                    reset: false,
+                    blend: false,
+                    session_changed: false,
+                    backwards: true,
+                    stale: true,
+                    capped: false,
+                    accept: false,
+                    want_coef: false,
+                    emit: false,
+                    drift_ri: ri,
+                    learn: false,
+                    buffered: false,
+                    parks: false,
+                    w: w.unwrap_or(1.0),
+                    zero: Weightless::No,
+                });
+                if keep_elapsed {
+                    elapsed.push(None);
+                }
+                continue;
             }
             // The step this row reads as a fresh stream's first accepted row,
             // that stream begun right after the last accepted row: none
@@ -2264,6 +2414,7 @@ impl Stream {
                 blend: !adv.reset && adv.session_changed,
                 session_changed: adv.session_changed,
                 backwards: below && !adv.session_changed,
+                stale: false,
                 capped: adv.capped,
                 accept,
                 want_coef,
@@ -2283,6 +2434,7 @@ impl Stream {
             clock: clock_state,
             rows_seen,
             fed,
+            skipped_step_back,
             coef_cadence,
             plans,
             elapsed,
@@ -2504,6 +2656,7 @@ impl Stream {
             clock: clock_state,
             rows_seen,
             fed,
+            skipped_step_back,
             coef_cadence,
             mut plans,
             elapsed,
@@ -2533,6 +2686,9 @@ impl Stream {
         self.persisted.rows_seen = rows_seen;
         self.persisted.fed = fed;
         self.persisted.coef_cadence = coef_cadence;
+        self.skipped_step_back_chunk = self
+            .skipped_step_back_chunk
+            .saturating_add(skipped_step_back);
 
         // ---- the data summary (docs/PLAN.md task 35) ----
         // After the clock is committed, so a refused row above has fed
@@ -2921,6 +3077,7 @@ impl Stream {
                 blend: false,
                 session_changed: false,
                 backwards: false,
+                stale: false,
                 // Scoring moves nothing, the lag ring included: the classes
                 // below give the row a *copy* of the model in the state a
                 // learning stream would have reached before reading it, its
@@ -3285,6 +3442,7 @@ struct Scheduled {
     clock: ClockState,
     rows_seen: u64,
     fed: u64,
+    skipped_step_back: u64,
     coef_cadence: CoefCadence,
     plans: Vec<RowPlan>,
     /// Each row's place on the elapsed clock, by its position, where the
@@ -3338,6 +3496,8 @@ struct RowPlan {
     session_changed: bool,
     /// The clock fell below the previous row's within a session.
     backwards: bool,
+    /// Skipped as a stale backward step under `on_step_back = "skip"`.
+    stale: bool,
     /// The clock jumped further than `gap_cap`, so the delta the models
     /// see is the ceiling. Anything lagged by *rows* is stale
     /// (`OnlineModel::clear_lags`, docs/PLAN.md task 47).

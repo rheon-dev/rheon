@@ -76,12 +76,26 @@ shows them at work.
     can be a new start, such as a replayed day or a restarted feed. Or it can
     be a late row: a transposed pair, a row a minute late, two sources never
     merged. Only the caller knows which size is which. What: unset (the
-    default), every step back is refused: the chunk is refused naming the
-    row, and the bank is untouched. Given, a step back no larger than it is
-    a late row, refused the same way. A larger one starts the model over;
-    ``0`` starts over at every step back. Needs ``clock``. It guards
-    learning: ``predict`` scores a row before the last learned clock against
-    the state as it stands, either way. Units: clock units.
+    default), every step back is refused under ``on_step_back="error"`` (or
+    skipped as a stale row under ``on_step_back="skip"``). Given, a step back
+    no larger than it is a late row, refused under ``on_step_back="error"``
+    or skipped under ``on_step_back="skip"``. A larger one resets the model;
+    ``0`` resets at every step back. Needs ``clock``. It guards learning:
+    ``predict`` scores a row before the last learned clock against the state
+    as it stands, either way. Units: clock units.
+``on_step_back``
+    What to do when a group's clock steps back on a late row: ``"error"``
+    (the default) or ``"skip"``. Under ``"error"``, any step back (when
+    ``restart_after_step_back`` is unset) or any step back no larger than
+    ``restart_after_step_back`` refuses the chunk before learning any of it.
+    Under ``"skip"``, those stale rows are skipped for that group without
+    affecting other groups: the output row is all-null, the group's clock and
+    model state stay untouched, the row does not enter an ``embargo`` or
+    ``label_clock`` buffer, ``clock_backwards`` in :meth:`ModelBank.summary`
+    counts it, and one :class:`~rheon.ReadinessWarning` summarizes the chunk
+    when any rows were skipped. With ``restart_after_step_back`` set, a step
+    back strictly larger than it still resets that group's model. Setting
+    ``"skip"`` needs ``clock``.
 ``session``, ``session_gap``
     Why: a stream in market-data-like sessions has boundaries where the clock
     stops measuring time -- overnight, over a weekend. What: ``session`` names

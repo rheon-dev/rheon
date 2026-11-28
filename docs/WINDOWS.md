@@ -243,9 +243,9 @@ output](how-to/make-window-features.md#window-an-operators-output)).
 
 **The operators read a spec's clock keywords, given once to `with_windows`
 for every formula in the call.** These are `clock`, `gap_cap`,
-`restart_after_step_back`, `session`, `session_gap` and `group`, and
-`gap_cap` is required with a clock. A [formula
-target](GLOSSARY.md#fitting-a-model) reads them from its spec. With `group`, each group keeps its own sessions and windows.
+`restart_after_step_back`, `on_step_back`, `session`, `session_gap` and
+`group`, and `gap_cap` is required with a clock. A [formula
+target](GLOSSARY.md#fitting-a-model) reads them from its spec. With `group`, each group keeps its own sessions and windows. Under `on_step_back="skip"`, a row whose clock steps back within its group (at or below `restart_after_step_back` when set) stays in the output with null formula columns without advancing the clock or entering any window, and one `ReadinessWarning` summarizes the run.
 
 **Unlike a spec, `with_windows` needs no `session_gap` for a session, since
 every window ends at a session change.** So no window measures the clock's

@@ -118,6 +118,9 @@ pub struct MergeConfig {
     /// The columns filled forward, each with its age beside it (PLAN 556);
     /// empty, none.
     pub carry: Vec<String>,
+    /// Whether backward steps that do not restart state are dropped as stale
+    /// (`on_step_back = "skip"`) rather than refused.
+    pub skip_step_back: bool,
 }
 
 /// How a clock column's values are ordered and stepped.
@@ -329,6 +332,11 @@ pub struct Merge {
     /// the values carried into it, past its rows) a group's carried value
     /// is read from; `IdxSize::MAX` for none.
     pos: Vec<IdxSize>,
+    /// Persisted stale-row drop counts per group id under `on_step_back = "skip"`.
+    skipped_step_back: Vec<u64>,
+    /// Transient run counters drained by [`Self::take_notices`].
+    skipped_step_back_run: u64,
+    skipped_groups_run: Vec<usize>,
 }
 
 /// A column a dtype refusal names, in Polars' words.
@@ -542,6 +550,9 @@ impl Merge {
             } else {
                 vec![IdxSize::MAX]
             },
+            skipped_step_back: if grouped { Vec::new() } else { vec![0] },
+            skipped_step_back_run: 0,
+            skipped_groups_run: Vec::new(),
         })
     }
 
@@ -674,9 +685,62 @@ impl Merge {
         }
     }
 
-    /// The rows of chunk `df` of input `i`'s clock as keys, each checked
-    /// against the row before it; with the rows that start the input again.
-    fn keys(&self, i: usize, df: &DataFrame) -> PolarsResult<(Vec<i64>, Vec<usize>)> {
+    /// Summary notices for stale rows dropped under `on_step_back = "skip"`,
+    /// drained once per call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        let rows = std::mem::take(&mut self.skipped_step_back_run);
+        let groups = std::mem::take(&mut self.skipped_groups_run).len();
+        if rows == 0 {
+            return Vec::new();
+        }
+        let row_word = if rows == 1 { "row" } else { "rows" };
+        let msg = if self.cfg.by.is_some() {
+            let grp_word = if groups == 1 { "group" } else { "groups" };
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} across {groups} {grp_word} under \
+                 on_step_back=\"skip\" (clock stepped backward; stale rows dropped)."
+            )
+        } else {
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} under on_step_back=\"skip\" (clock \
+                 stepped backward; stale rows dropped)."
+            )
+        };
+        vec![msg]
+    }
+
+    /// Total persisted stale rows dropped across all groups.
+    pub fn total_skipped_step_back(&self) -> u64 {
+        self.skipped_step_back
+            .iter()
+            .fold(0u64, |acc, &n| acc.saturating_add(n))
+    }
+
+    /// Persisted stale-row counts by group key.
+    pub fn skipped_step_back_by_group(&self) -> Vec<(Option<String>, u64)> {
+        let mut out: Vec<(Option<String>, u64)> = self
+            .group_keys
+            .iter()
+            .zip(&self.skipped_step_back)
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (k.clone(), n))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn record_skipped(&mut self, gid: usize) {
+        self.skipped_step_back[gid] = self.skipped_step_back[gid].saturating_add(1);
+        self.skipped_step_back_run = self.skipped_step_back_run.saturating_add(1);
+        if !self.skipped_groups_run.contains(&gid) {
+            self.skipped_groups_run.push(gid);
+        }
+    }
+
+    /// Parse each row's clock value of chunk `df` of input `i` into an
+    /// order-preserving `i64` key, refusing null, NaN, infinite, or out-of-range
+    /// clocks.
+    fn raw_keys(&self, i: usize, df: &DataFrame) -> PolarsResult<Vec<i64>> {
         let col = df.column(&self.cfg.clock)?.as_materialized_series();
         let name = &self.inputs[i].name;
         let base = self.inputs[i].rows_read;
@@ -687,7 +751,7 @@ impl Merge {
                 self.cfg.clock, base + row as u64
             )
         };
-        let keys: Vec<i64> = match self.mode {
+        match self.mode {
             Mode::Float => {
                 let c = col.cast(&DataType::Float64)?;
                 c.f64()?
@@ -699,7 +763,7 @@ impl Merge {
                         Some(x) if x.is_infinite() => Err(bad(row, "infinite")),
                         Some(x) => Ok(float_key(x)),
                     })
-                    .collect::<PolarsResult<_>>()?
+                    .collect::<PolarsResult<_>>()
             }
             Mode::Int if col.dtype() == &DataType::UInt64 => col
                 .u64()?
@@ -716,16 +780,24 @@ impl Merge {
                         )
                     }),
                 })
-                .collect::<PolarsResult<_>>()?,
+                .collect::<PolarsResult<_>>(),
             Mode::Int | Mode::Temporal { .. } => {
                 let c = col.to_physical_repr().cast(&DataType::Int64)?;
                 c.i64()?
                     .iter()
                     .enumerate()
                     .map(|(row, v)| v.ok_or_else(|| bad(row, "null")))
-                    .collect::<PolarsResult<_>>()?
+                    .collect::<PolarsResult<_>>()
             }
-        };
+        }
+    }
+
+    /// The rows of chunk `df` of input `i`'s clock as keys, each checked
+    /// against the row before it; with the rows that start the input again.
+    fn keys(&self, i: usize, df: &DataFrame) -> PolarsResult<(Vec<i64>, Vec<usize>)> {
+        let name = &self.inputs[i].name;
+        let base = self.inputs[i].rows_read;
+        let keys = self.raw_keys(i, df)?;
         let mut bumps = Vec::new();
         let mut prev = self.inputs[i].read.map(|(k, _)| k);
         for (row, &k) in keys.iter().enumerate() {
@@ -787,6 +859,7 @@ impl Merge {
         let id = u32::try_from(self.group_keys.len()).expect("fewer than 2^32 groups");
         self.group_keys.push(key);
         self.group_last.push(None);
+        self.skipped_step_back.push(0);
         for c in &mut self.carry {
             c.slots.push(None);
         }
@@ -820,8 +893,53 @@ impl Merge {
         if df.height() == 0 {
             return Ok(());
         }
-        let (keys, bumps) = self.keys(i, &df)?;
-        let gids = self.gids(&df)?;
+        let orig_height = df.height();
+        let (df, keys, gids, bumps) = if !self.cfg.skip_step_back {
+            let (keys, bumps) = self.keys(i, &df)?;
+            let gids = self.gids(&df)?;
+            (df, keys, gids, bumps)
+        } else {
+            let raw = self.raw_keys(i, &df)?;
+            let all_gids = self.gids(&df)?;
+            let mut keep = Vec::with_capacity(orig_height);
+            let mut kept_keys = Vec::with_capacity(orig_height);
+            let mut kept_gids = Vec::with_capacity(all_gids.len());
+            let mut bumps = Vec::new();
+            let mut prev = self.inputs[i].read.map(|(k, _)| k);
+            let mut any_dropped = false;
+            for (row, &k) in raw.iter().enumerate() {
+                if let Some(p) = prev
+                    && k < p
+                {
+                    let back = self.back(p, k);
+                    if back.refused {
+                        keep.push(false);
+                        any_dropped = true;
+                        let gid = all_gids.get(row).map_or(0, |&g| g as usize);
+                        self.record_skipped(gid);
+                        continue;
+                    }
+                    bumps.push(kept_keys.len());
+                }
+                keep.push(true);
+                kept_keys.push(k);
+                if !all_gids.is_empty() {
+                    kept_gids.push(all_gids[row]);
+                }
+                prev = Some(k);
+            }
+            if kept_keys.is_empty() {
+                self.inputs[i].rows_read += orig_height as u64;
+                return Ok(());
+            }
+            let df = if any_dropped {
+                let mask: BooleanChunked = keep.into_iter().map(Some).collect();
+                df.filter(&mask)?
+            } else {
+                df
+            };
+            (df, kept_keys, kept_gids, bumps)
+        };
         let input = &mut self.inputs[i];
         let restarts = input.read.map_or(0, |(_, r)| r);
         let n_bumps = bumps.len() as u64;
@@ -845,7 +963,7 @@ impl Merge {
             bumps,
         };
         let last = block.last();
-        input.rows_read += block.len() as u64;
+        input.rows_read += orig_height as u64;
         input.read = Some((last.1, last.0));
         let was_empty = input.queue.is_empty();
         input.queue.push_back(block);
@@ -967,8 +1085,8 @@ impl Merge {
                     }
                 };
                 let start = parts[p].start;
-                let from = block.pos;
                 let mut last_out = (0, 0);
+                let mut emitted_any = false;
                 // A step back in a group's merged rows, for the rule to judge.
                 let mut stepped: Option<(usize, i64, i64)> = None;
                 // Whether the rows stopped inside the block, its head no
@@ -987,6 +1105,7 @@ impl Merge {
                     }
                     *last = Some(key);
                     last_out = (key, block.restarts);
+                    emitted_any = true;
                     picks.push((p as u32, (row - start) as u32));
                     if carrying {
                         meta.push((gid as u32, block.restarts, key));
@@ -1003,21 +1122,46 @@ impl Merge {
                         break;
                     }
                 }
-                let used_up = !stopped && stepped.is_none();
+                let mut used_up = !stopped && stepped.is_none();
                 parts[p].end = block.pos;
                 let row_number = block.first_row.map(|f| f + block.pos as u64);
-                if block.first_row.is_some() && block.pos > from {
+                if block.first_row.is_some() && emitted_any {
                     input.taken = Some(last_out);
                 }
                 if let Some((gid, l, key)) = stepped {
                     let back = self.back(l, key);
                     if back.refused {
-                        return Err(self.group_refusal(i, gid, &back, row_number));
+                        if !self.cfg.skip_step_back {
+                            return Err(self.group_refusal(i, gid, &back, row_number));
+                        }
+                        self.record_skipped(gid);
+                        let more = self.inputs[i]
+                            .queue
+                            .front_mut()
+                            .expect("block present")
+                            .advance();
+                        parts[p].end = self.inputs[i].queue.front().expect("block present").pos;
+                        if more {
+                            let head = self.inputs[i].queue.front().expect("block present").head();
+                            if picks.len() >= budget
+                                || hold_at.is_some_and(|h| head >= h)
+                                || bound.is_some_and(|b| (head.0, head.1, i) > b)
+                            {
+                                self.heap.push(Reverse((head.0, head.1, i)));
+                                if picks.len() >= budget {
+                                    break 'merge;
+                                }
+                                break;
+                            }
+                            continue;
+                        }
+                        used_up = true;
+                    } else {
+                        // A step back past the setting: the group starts again,
+                        // as a bank's would; the row goes out on the next turn.
+                        self.group_last[gid] = Some(key);
+                        continue;
                     }
-                    // A step back past the setting: the group starts again,
-                    // as a bank's would; the row goes out on the next turn.
-                    self.group_last[gid] = Some(key);
-                    continue;
                 }
                 let input = &mut self.inputs[i];
                 if used_up {

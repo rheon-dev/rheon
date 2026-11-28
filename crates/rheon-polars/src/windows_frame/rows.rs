@@ -129,6 +129,16 @@ pub(super) fn as_f64(v: RunValue) -> f64 {
     }
 }
 
+/// Clock policy slice that [`step_increments`] reads.
+#[derive(Clone, Copy)]
+pub(super) struct IncrPolicy {
+    pub(super) restart: f64,
+    pub(super) restarts: bool,
+    pub(super) skips: bool,
+    pub(super) gap_cap: f64,
+    pub(super) grouped: bool,
+}
+
 /// One value a row operator gives, per row of `keys`: an increment's
 /// `x_i - x_{i-1}` within each key's session, a run length's run and a
 /// clock drift's lag or slope (task 564), moving `track` as it goes.
@@ -136,12 +146,19 @@ pub(super) fn as_f64(v: RunValue) -> f64 {
 pub(super) fn step_increments(
     track: IncrTrack<'_>,
     (ops, slots): (&[RowOp], &[(Node, bool)]),
-    (restart, restarts, gap_cap): (f64, bool, f64),
+    policy: IncrPolicy,
     inputs: &IncrInputs,
     keys: &[Option<&str>],
     clock: &Option<Vec<ClockValue>>,
     session: Option<&[u64]>,
 ) -> Vec<Vec<Option<f64>>> {
+    let IncrPolicy {
+        restart,
+        restarts,
+        skips,
+        gap_cap,
+        grouped,
+    } = policy;
     let IncrTrack {
         state,
         index,
@@ -203,29 +220,48 @@ pub(super) fn step_increments(
         };
         // A step back on the stream's clock past the threshold restarts
         // every group in the core, so every group's increments start
-        // over too (review R1, S4).
+        // over too (review R1, S4); under `on_step_back = "skip"`, a step back
+        // that does not restart skips the stale row and leaves every state
+        // untouched.
         let now_clock = clock.as_ref().map(|c| c[r]);
+        let now_session = session.map(|s| s[r]);
+        let stream_session_changed =
+            !grouped && state[gi].session != now_session && state[gi].session.is_some();
         if let (Some(now), Some(prev)) = (now_clock, *stream_clock)
-            && restarts
-            && back_past(prev, now, restart)
+            && now.is_before(prev)
+            && !stream_session_changed
         {
-            for st in state.iter_mut() {
-                st.prev.iter_mut().for_each(|p| *p = f64::NAN);
-                st.prev_ns.iter_mut().for_each(|p| *p = None);
-                st.prev_int.iter_mut().for_each(|p| *p = None);
-                st.rows.iter_mut().for_each(|s| s.restart(false));
+            if restarts && back_past(prev, now, restart) {
+                for st in state.iter_mut() {
+                    st.prev.iter_mut().for_each(|p| *p = f64::NAN);
+                    st.prev_ns.iter_mut().for_each(|p| *p = None);
+                    st.prev_int.iter_mut().for_each(|p| *p = None);
+                    st.rows.iter_mut().for_each(|s| s.restart(false));
+                    st.clock = None;
+                }
+            } else if skips {
+                for col in &mut out {
+                    col.push(None);
+                }
+                continue;
+            }
+        }
+        let st = &mut state[gi];
+        let mut new_start = st.session != now_session && st.session.is_some();
+        if let (Some(now), Some(prev)) = (now_clock, st.clock)
+            && now.is_before(prev)
+            && !new_start
+        {
+            if restarts && back_past(prev, now, restart) {
+                new_start = true;
+            } else if skips {
+                for col in &mut out {
+                    col.push(None);
+                }
+                continue;
             }
         }
         *stream_clock = now_clock;
-        let st = &mut state[gi];
-        let now_session = session.map(|s| s[r]);
-        let mut new_start = st.session != now_session && st.session.is_some();
-        if let (Some(now), Some(prev)) = (now_clock, st.clock)
-            && restarts
-            && back_past(prev, now, restart)
-        {
-            new_start = true;
-        }
         if new_start {
             st.prev.iter_mut().for_each(|p| *p = f64::NAN);
             st.prev_ns.iter_mut().for_each(|p| *p = None);

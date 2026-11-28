@@ -87,6 +87,14 @@ struct MergeFile {
     /// Under `carry` alone, so a merge without it writes the bytes it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     carry: Option<CarryState>,
+    /// True under `on_step_back = "skip"`; absent under `"error"` so existing
+    /// state bytes are untouched.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    skip_step_back: bool,
+    /// Per-group stale rows dropped under `on_step_back = "skip"`, sorted by
+    /// group key; absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skipped_step_back: Vec<(GroupKey, u64)>,
     /// The xxh3-64 of every byte before it (`checksum.rs`), last; read from
     /// the file's last bytes, never by serde.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -195,6 +203,14 @@ impl Merge {
                 groups: held,
             })
         };
+        let mut skipped_step_back: Vec<(GroupKey, u64)> = self
+            .group_keys
+            .iter()
+            .zip(&self.skipped_step_back)
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (GroupKey(k.clone()), n))
+            .collect();
+        skipped_step_back.sort_by(|a, b| a.0.cmp(&b.0));
         let file = MergeFile {
             magic: crate::envelope::MAGIC.into(),
             kind: crate::envelope::Kind::Merge.tag().into(),
@@ -206,6 +222,8 @@ impl Merge {
             inputs,
             groups,
             carry,
+            skip_step_back: self.cfg.skip_step_back,
+            skipped_step_back,
             checksum: Some(crate::checksum::Trailer::Patched),
         };
         let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
@@ -326,6 +344,23 @@ impl Merge {
                  to start over."
             ));
         }
+        if file.skip_step_back != self.cfg.skip_step_back {
+            let was = if file.skip_step_back { "skip" } else { "error" };
+            let now = if self.cfg.skip_step_back {
+                "skip"
+            } else {
+                "error"
+            };
+            return Err(format!(
+                "{WHO}: the state was saved with on_step_back = {was:?}, but this call gives \
+                 {now:?}. Give on_step_back = {was:?}, or leave out load_state to start over."
+            ));
+        }
+        if !file.skip_step_back && !file.skipped_step_back.is_empty() {
+            return Err(damaged(
+                "it records skipped step-back rows under on_step_back=\"error\"",
+            ));
+        }
         if file.inputs.len() != self.inputs.len() {
             return Err(damaged("it holds another number of inputs than it names"));
         }
@@ -358,6 +393,36 @@ impl Merge {
         }
         if let Some(carry) = file.carry {
             self.restore_carry(carry)?;
+        }
+        let mut seen_skipped = std::collections::HashSet::new();
+        for (key, count) in file.skipped_step_back {
+            if count == 0 {
+                return Err(damaged("a group records 0 skipped step-back rows"));
+            }
+            if !seen_skipped.insert(key.clone()) {
+                return Err(damaged("a group's skipped step-back count is held twice"));
+            }
+            let gid = match (&self.cfg.by, &key.0) {
+                (None, Some(s)) if s.is_empty() => 0usize,
+                (None, _) => return Err(damaged("an ungrouped state holds a group")),
+                (Some(_), Some(s)) => match self.gid_of.get(s) {
+                    Some(&id) => id as usize,
+                    None => {
+                        let id = self.new_group(Some(s.clone()));
+                        self.gid_of.insert(s.clone(), id);
+                        id as usize
+                    }
+                },
+                (Some(_), None) => match self.null_gid {
+                    Some(id) => id as usize,
+                    None => {
+                        let id = self.new_group(None);
+                        self.null_gid = Some(id);
+                        id as usize
+                    }
+                },
+            };
+            self.skipped_step_back[gid] = count;
         }
         for (i, st) in file.inputs.into_iter().enumerate() {
             let taken = match st.last {
@@ -396,8 +461,8 @@ impl Merge {
             }
             let (k, restarts) = taken.expect("checked above");
             // Every held row is at the input's last clock: a tie.
-            let (keys, _) = self
-                .keys(i, &df)
+            let keys = self
+                .raw_keys(i, &df)
                 .map_err(|e| damaged(&format!("the rows it holds have invalid clocks ({e})")))?;
             if df.height() == 0 || keys.iter().any(|&x| x != k) {
                 return Err(damaged(
@@ -623,5 +688,69 @@ mod carry_state_tests {
             .to_string();
             assert!(err.contains("the state is damaged"), "{err}");
         }
+    }
+
+    /// STATE-3: `on_step_back` mismatch and malformed `skipped_step_back`
+    /// tables in a merge state file are refused cleanly.
+    #[test]
+    fn damaged_step_back_state_and_policy_mismatch_are_refused() {
+        let a = df!("t" => [1.0, 5.0, 3.0], "g" => ["a", "a", "a"], "x" => [1i64, 2, 9]).unwrap();
+        let mut skip_cfg = cfg("t");
+        skip_cfg.by = Some("g".into());
+        skip_cfg.skip_step_back = true;
+        let mut m = merge_of(std::slice::from_ref(&a), skip_cfg.clone());
+        let _ = drive(&mut m, &[vec![a.clone()]], None, false);
+        assert_eq!(m.total_skipped_step_back(), 1);
+        let bytes = m.save_bytes().unwrap();
+
+        let mut err_cfg = skip_cfg.clone();
+        err_cfg.skip_step_back = false;
+        let e = Merge::load_bytes(
+            &bytes,
+            names(1),
+            vec![a.schema().as_ref().clone()],
+            err_cfg.clone(),
+        )
+        .err()
+        .expect("skip state must refuse error call")
+        .to_string();
+        assert!(e.contains("on_step_back"), "{e}");
+
+        let reseal = |mut f: MergeFile, load_cfg: MergeConfig, schema: &Schema| -> String {
+            f.checksum = Some(crate::checksum::Trailer::Patched);
+            let mut raw = rmp_serde::to_vec_named(&f).unwrap();
+            crate::checksum::seal(&mut raw);
+            Merge::load_bytes(&raw, names(1), vec![schema.clone()], load_cfg)
+                .err()
+                .map_or_else(String::new, |e| e.to_string())
+        };
+
+        // 1) Zero count in skipped_step_back.
+        let mut f: MergeFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skipped_step_back = vec![(GroupKey(Some("a".into())), 0)];
+        assert!(reseal(f, skip_cfg.clone(), a.schema()).contains("the state is damaged"));
+
+        // 2) Duplicate group key in skipped_step_back.
+        let mut f: MergeFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skipped_step_back = vec![
+            (GroupKey(Some("a".into())), 1),
+            (GroupKey(Some("a".into())), 2),
+        ];
+        assert!(reseal(f, skip_cfg.clone(), a.schema()).contains("the state is damaged"));
+
+        // 3) Non-empty skipped_step_back under skip_step_back = false.
+        let mut f: MergeFile = rmp_serde::from_slice(&bytes).unwrap();
+        f.skip_step_back = false;
+        assert!(reseal(f, err_cfg, a.schema()).contains("the state is damaged"));
+
+        // 4) Non-null group key in ungrouped merge.
+        let ungrouped = df!("t" => [1.0, 5.0, 3.0], "x" => [1i64, 2, 9]).unwrap();
+        let mut u_cfg = cfg("t");
+        u_cfg.skip_step_back = true;
+        let mut mu = merge_of(std::slice::from_ref(&ungrouped), u_cfg.clone());
+        let _ = drive(&mut mu, &[vec![ungrouped.clone()]], None, false);
+        let mut f: MergeFile = rmp_serde::from_slice(&mu.save_bytes().unwrap()).unwrap();
+        f.skipped_step_back = vec![(GroupKey(Some("a".into())), 1)];
+        assert!(reseal(f, u_cfg, ungrouped.schema()).contains("the state is damaged"));
     }
 }

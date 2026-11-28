@@ -43,6 +43,7 @@
   lam = None
   gap_cap = None
   restart_after_step_back = None
+  on_step_back = 'error'
   session = None
   session_gap = None
   weight = None
@@ -772,6 +773,7 @@
   chunk_size = 100000
   shared by every kind below:
     clock.gap_cap = "inf"
+    clock.on_step_back = "error"
     clock.restart_after_step_back = null
     clock.session_gap = null
     stream.average_eta = 1.0
@@ -2015,11 +2017,11 @@
   LazyFrame.rheon.fit_predict(specs: 'Specs | None' = None, *, load_state: 'State | ModelBank | None' = None, save_state: 'State | None' = None, closed_groups: 'State | None' = None, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame'
   LazyFrame.rheon.predict(bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame'
   LazyFrame.rheon.unnest(specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.LazyFrame'
-  LazyFrame.rheon.with_windows(*exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame'
+  LazyFrame.rheon.with_windows(*exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, on_step_back: "Literal['error', 'skip'] | None" = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame'
   DataFrame.rheon.fit_predict(specs: 'Specs | None' = None, *, load_state: 'State | ModelBank | None' = None, save_state: 'State | None' = None, closed_groups: 'State | None' = None, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.DataFrame'
   DataFrame.rheon.predict(bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.DataFrame'
   DataFrame.rheon.unnest(specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.DataFrame'
-  DataFrame.rheon.with_windows(*exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.DataFrame'
+  DataFrame.rheon.with_windows(*exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, on_step_back: "Literal['error', 'skip'] | None" = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.DataFrame'
 
 [frame columns]  # column: dtype, in order: a column renamed, retyped, moved or added is a diff here
   ModelBank.groups():
@@ -2412,13 +2414,13 @@
     regimes(m: 'int', *, states: 'Sequence[Any]', transition: 'Any', n_blocks: 'int', rows_per_block: 'int', durations: 'Sequence[int] | None' = None, design: 'str' = 'step', smooth_rows: 'int' = 0, phi: 'float | Sequence[float]' = 0.0, scale_state: 'float | Sequence[float]' = 0.0, async_rates: 'Sequence[float] | None' = None, noise: 'float' = 0.0, cycle_profile: 'Sequence[float] | None' = None, cycle_rows: 'int | None' = None, activity: 'tuple[float, float] | None' = None, seed: 'int' = 0) -> 'dict[str, pl.DataFrame]'
   stream:
     ROLE
-    bars(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', kind: "Literal['count', 'sum', 'imbalance']", threshold: 'float | str | pl.Expr', quantity: 'str | pl.Expr | None' = None, group: 'str | None' = None, weight: 'str | None' = None, session: 'str | None' = None, gap_cap: 'float | Duration | None' = None, max_span: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, partial: "Literal['keep', 'drop']" = 'keep', group_close: "Literal['monotone'] | None" = None, final: 'bool' = False, max_state_bytes: 'int' = 262144, max_total_bytes: 'int' = 1073741824, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **aggregates: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
+    bars(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', kind: "Literal['count', 'sum', 'imbalance']", threshold: 'float | str | pl.Expr', quantity: 'str | pl.Expr | None' = None, group: 'str | None' = None, weight: 'str | None' = None, session: 'str | None' = None, gap_cap: 'float | Duration | None' = None, max_span: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, on_step_back: "Literal['error', 'skip']" = 'error', partial: "Literal['keep', 'drop']" = 'keep', group_close: "Literal['monotone'] | None" = None, final: 'bool' = False, max_state_bytes: 'int' = 262144, max_total_bytes: 'int' = 1073741824, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **aggregates: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
     embargo(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', delay: 'float | Duration', weight: 'str | None' = None, role: 'str' = '_online_role') -> 'pl.LazyFrame | pl.DataFrame'
     load_checkpoint(source: 'str | os.PathLike[str] | bytes') -> 'dict[str, bytes]'
-    merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, carry: 'str | Sequence[str]' = (), restart_after_step_back: 'float | Duration | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
-    refresh_time(lf: 'pl.LazyFrame | pl.DataFrame', *, series: 'str', names: 'Sequence[str]', clock: 'str', value: 'str', group: 'str | None' = None, pairs: 'bool' = False, keep: 'Sequence[str]' = (), age: 'bool' = False, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+    merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, carry: 'str | Sequence[str]' = (), restart_after_step_back: 'float | Duration | None' = None, on_step_back: "Literal['error', 'skip']" = 'error', chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+    refresh_time(lf: 'pl.LazyFrame | pl.DataFrame', *, series: 'str', names: 'Sequence[str]', clock: 'str', value: 'str', group: 'str | None' = None, pairs: 'bool' = False, keep: 'Sequence[str]' = (), age: 'bool' = False, on_step_back: "Literal['error', 'skip']" = 'error', chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
     save_checkpoint(path: 'str | os.PathLike[str]', stages: 'Mapping[str, ModelBank | bytes | str | os.PathLike[str]]') -> 'None'
-    with_windows(lf: 'pl.LazyFrame | pl.DataFrame', *exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
+    with_windows(lf: 'pl.LazyFrame | pl.DataFrame', *exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, on_step_back: "Literal['error', 'skip'] | None" = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
 
 [output field grammar]  # name: dtype, the strings users index the output struct by, each with the dtype output_index declares
   ewridge minimal:
@@ -3856,6 +3858,7 @@
   spec.drift_kind: adwin, cusum, ddm, eddm, kswin, page_hinkley
   spec.group_close: monotone, session
   spec.held_overflow: drop_oldest, refuse
+  spec.on_step_back: error, skip
   spec.robust_se_types: hc0, hc1, hc2, hc3
   spec.session_gap: reset
   bocpd.covariance_type: diag, full
@@ -4055,6 +4058,7 @@
     min_weight
     model
     name
+    on_step_back
     resid_autocorr_lag
     resid_quantiles
     restart_after_step_back

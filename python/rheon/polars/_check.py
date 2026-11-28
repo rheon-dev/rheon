@@ -935,8 +935,9 @@ def _clock_findings(spec: dict[str, Any], row: dict[str, Any], add: Any) -> None
             spec.get("clock"),
             float(back),
             0.0,
-            f"the clock stepped back {back} times in {_who(g)}, each a restart "
-            "or a late row under restart_after_step_back: sort the input by "
+            f"the clock stepped back {back} times in {_who(g)}, each a reset "
+            "under restart_after_step_back or a stale row skipped under "
+            'on_step_back="skip": sort the input by '
             "its clock within each group if that was not meant",
         )
     resets = row["resets"]

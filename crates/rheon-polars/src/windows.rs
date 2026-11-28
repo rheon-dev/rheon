@@ -847,6 +847,8 @@ pub enum Peek {
     Forward,
     /// The same stamp as the last row the stream read.
     SameStamp,
+    /// A step back that the policy skips as stale (`on_step_back = "skip"`).
+    StepBack,
 }
 
 /// Which kind of operator a state cap or warning is about: its `op` is an
@@ -1878,6 +1880,9 @@ struct Group {
     /// empty before the group's first row after one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     seasonal: Vec<seasonal::SeasState>,
+    /// Stale rows skipped on this group under `on_step_back = "skip"`.
+    #[serde(default, skip_serializing_if = "step_back::is_zero_u64")]
+    skipped_step_back: u64,
 }
 
 #[cfg(test)]
@@ -1921,6 +1926,8 @@ pub struct Emitted {
     pub values: Vec<Vec<f64>>,
     /// Per row: whether a `"drop"` operator was partial on it.
     pub drop: Vec<bool>,
+    /// Per row: whether the row was skipped as stale under `on_step_back = "skip"`.
+    pub stale: Vec<bool>,
 }
 
 /// The window core: every group's kernels over one stream, fed rows in
@@ -1999,6 +2006,11 @@ pub struct Windows {
     state_warned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     state_warning: Option<(usize, u64, u64)>,
+    /// Held rows skipped as stale under `on_step_back = "skip"`, ascending by `seq`.
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    stale_seqs: VecDeque<u64>,
+    #[serde(skip)]
+    skipped_run: step_back::TransientSkips,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
@@ -2082,6 +2094,7 @@ mod moments;
 mod plain;
 mod profile;
 mod seasonal;
+mod step_back;
 
 pub use cross::{
     CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat, Interp,
@@ -2215,6 +2228,8 @@ impl Windows {
             seasonals: Arc::new(seasonals),
             state_warned: false,
             state_warning: None,
+            stale_seqs: VecDeque::new(),
+            skipped_run: step_back::TransientSkips::default(),
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
             kernels: Arc::new(kernels),
             ops: Arc::new(ops),
@@ -2481,6 +2496,7 @@ impl Windows {
             moments: self.moments.iter().map(MomentsRun::new).collect(),
             profile: Vec::new(),
             seasonal: Vec::new(),
+            skipped_step_back: 0,
         });
         match key {
             Some(k) => {
@@ -2542,6 +2558,9 @@ impl Windows {
             None => self.null_group,
         };
         let (_, adv, _, own) = self.step_clocks(gi, clock, session)?;
+        if adv.skipped_step_back || own.skipped_step_back {
+            return Ok(Peek::StepBack);
+        }
         if adv.reset || adv.session_changed || own.reset || own.session_changed {
             return Ok(Peek::NewStart);
         }
@@ -2564,6 +2583,24 @@ impl Windows {
         self.scratch();
         let seq = self.next_seq;
         let gi = row.group;
+        let stream_session = if self.grouped { None } else { row.session };
+        let plain = match self.shared.plain_forward(row.clock, stream_session, true) {
+            Some(a) => self.groups[gi]
+                .clock
+                .plain_forward_after(&self.shared, a, row.clock, row.session, true)
+                .map(|b| (a, b)),
+            None => None,
+        };
+        let pre_stepped = if plain.is_none() && self.clock_cfg.on_clock_reset.skips() {
+            let res = self.step_clocks(Some(gi), row.clock, row.session)?;
+            if res.1.skipped_step_back || res.3.skipped_step_back {
+                self.push_stale(gi, seq);
+                return Ok(());
+            }
+            Some(res)
+        } else {
+            None
+        };
         // The cross-group operators' state with this row, before anything
         // moves: a row that would take an operator past its cap is refused.
         let cross_held = match &self.cross {
@@ -2577,20 +2614,6 @@ impl Windows {
         } else {
             profile::check_row(&self.profiles, &self.groups[gi], row.clock, row.values, seq)?
         };
-        // A plain step forward on both clocks is never refused: each steps
-        // where it stands, with no copy of the state to keep or put back.
-        // Any other row steps both on copies, kept only once neither
-        // refuses it.
-        let stream_session = if self.grouped { None } else { row.session };
-        let plain = match self.shared.plain_forward(row.clock, stream_session, true) {
-            // The group's clock, at the stream's last clock value as it
-            // mostly is, takes the step the stream's did.
-            Some(a) => self.groups[gi]
-                .clock
-                .plain_forward_after(&self.shared, a, row.clock, row.session, true)
-                .map(|b| (a, b)),
-            None => None,
-        };
         let (adv, clock, own) = if let Some((a, b)) = plain {
             let adv = self
                 .shared
@@ -2603,7 +2626,10 @@ impl Windows {
             );
             (adv, None, own)
         } else {
-            let (shared, adv, clock, own) = self.step_clocks(Some(gi), row.clock, row.session)?;
+            let (shared, adv, clock, own) = match pre_stepped {
+                Some(res) => res,
+                None => self.step_clocks(Some(gi), row.clock, row.session)?,
+            };
             self.shared = shared;
             (adv, Some(clock), own)
         };
@@ -2653,6 +2679,7 @@ impl Windows {
                 adv.session_changed || adv.capped,
                 &mut rows,
                 seq,
+                &self.stale_seqs,
             );
         }
 
@@ -3202,7 +3229,7 @@ impl Windows {
                 meta: &mut self.held_meta,
                 find: &find,
             };
-            c.finish(&mut rows, self.next_seq);
+            c.finish(&mut rows, self.next_seq, &self.stale_seqs);
         }
         self.ready = self.held_meta.len();
         self.ready_kept = self.held_meta.iter().filter(|m| !m.drop).count();
@@ -3211,11 +3238,21 @@ impl Windows {
 
     fn emit(&mut self, rows: usize) -> Emitted {
         let n_out = self.n_outputs;
+        let mut stale = vec![false; rows];
+        let limit = self.held_first + rows as u64;
+        while let Some(&s) = self.stale_seqs.front() {
+            if s >= limit {
+                break;
+            }
+            self.stale_seqs.pop_front();
+            stale[(s - self.held_first) as usize] = true;
+        }
         let mut out = Emitted {
             first_seq: self.held_first,
             rows,
             values: vec![Vec::with_capacity(rows); n_out],
             drop: Vec::with_capacity(rows),
+            stale,
         };
         // The rows' values are one run of `n_out` a row; each operator's are
         // every `n_out`-th of it.

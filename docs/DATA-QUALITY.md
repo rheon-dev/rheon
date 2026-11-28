@@ -1162,7 +1162,7 @@ policy met
 
 | code | severity | fires when |
 |---|---|---|
-| `step_back` | warning | the clock stepped back within a group, each a reset or a late row under `restart_after_step_back` |
+| `step_back` | warning | the clock stepped back within a group, a reset under `restart_after_step_back` or a stale row skipped under `on_step_back="skip"` |
 | `resets` | info | a model started over, at a `session_gap="reset"` or a step back: each start forgets what came before |
 | `duplicate_stamps` | info | from an audit: a row shares the clock of the row before |
 | `gaps` | info | from an audit: a step between rows reaches `gap_cap` |
@@ -1172,11 +1172,13 @@ For `irregular_clock`, steps drawn from an exponential, which is what
 arrivals at random times give, read 0.96 to 1.04. A clock whose steps
 vary uniformly between 0.5 and 1.5 read 0.29.
 
-**What each clock event does.** With `restart_after_step_back` unset, the
-default, the bank refuses a chunk with any step back, before it learns any
-row of it. A step back larger than the setting resets the model, which
-forgets everything, and one no larger is refused as a late row. Equal
-stamps are zero apart: no decay passes between them, and a window holds
+**What each clock event does.** With `on_step_back="error"` and
+`restart_after_step_back` unset, the default, the bank refuses a chunk with
+any step back, before it learns any row of it. A step back larger than
+`restart_after_step_back` resets the model, which forgets everything, while
+one no larger is refused under `on_step_back="error"` or skipped as a stale
+row under `on_step_back="skip"` (producing an all-null output row without
+moving the group's clock or model state). Equal stamps are zero apart: no decay passes between them, and a window holds
 them together. That is right for two trades in one millisecond, and wrong
 for a row the feed sent twice, which then counts double. A step that
 reaches `gap_cap` is capped, so a quiet hour decays the fit by no more than

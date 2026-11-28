@@ -864,6 +864,13 @@ ENUM_PROBES: list[
         "word",
     ),
     (
+        "spec.on_step_back",
+        "ewridge",
+        {"clock": "t", "gap_cap": 10.0},
+        "on_step_back",
+        "word",
+    ),
+    (
         "spec.robust_se_types",
         "ewridge",
         {"emit_robust_se": True},

@@ -116,23 +116,48 @@ impl Decay {
 /// and `"zero"`, which took none, were removed on 2026-09-28 -- a cap is not
 /// a step, and both absorbed a data bug into plausible, wrong output.
 ///
-/// A spec does not name this or [`ClockCfg::min_backwards_jump`]: its one
-/// knob, `restart_after_step_back`, builds both (task 144). Unset is
-/// [`OnClockReset::Error`]; given, it is [`OnClockReset::ResetState`] with
-/// `min_backwards_jump` at its value.
+/// A spec sets this and [`ClockCfg::min_backwards_jump`] through two knobs:
+/// `on_step_back` (`"error"` or `"skip"`) and `restart_after_step_back`
+/// (unset, or a threshold above which a step back restarts state).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnClockReset {
-    /// Refuse the row (the default, and a spec without
-    /// `restart_after_step_back`). A backwards clock is usually a data bug
-    /// -- a mis-sorted chunk, or rows from two streams interleaved -- and
+    /// Refuse every step back (the default: `on_step_back = "error"`,
+    /// `restart_after_step_back = None`). A backwards clock is usually a data
+    /// bug -- a mis-sorted chunk, or rows from two streams interleaved -- and
     /// absorbing it gives plausible but wrong output.
     #[default]
     Error,
-    /// The clock resets on purpose (a spec with `restart_after_step_back`):
-    /// a step back by more than `min_backwards_jump` starts the model over,
-    /// and one by no more than it is a late row, refused as [`Disorder`].
+    /// The clock resets on purpose (`on_step_back = "error"`,
+    /// `restart_after_step_back = Some(T)`): a step back by more than
+    /// `min_backwards_jump` starts the model over, and one by no more than it
+    /// is a late row, refused as [`Disorder`].
     ResetState,
+    /// Skip every stale row whose clock steps strictly backward
+    /// (`on_step_back = "skip"`, `restart_after_step_back = None`), leaving
+    /// clock and model state untouched.
+    Skip,
+    /// Skip backward steps up to `min_backwards_jump` as stale rows, and
+    /// restart state on backward steps strictly larger than
+    /// `min_backwards_jump` (`on_step_back = "skip"`,
+    /// `restart_after_step_back = Some(T)`).
+    SkipOrReset,
+}
+
+impl OnClockReset {
+    /// Whether backward steps that do not restart state are skipped as stale
+    /// rather than refused.
+    #[inline]
+    pub fn skips(self) -> bool {
+        matches!(self, Self::Skip | Self::SkipOrReset)
+    }
+
+    /// Whether backward steps strictly larger than `min_backwards_jump`
+    /// restart state.
+    #[inline]
+    pub fn resets(self) -> bool {
+        matches!(self, Self::ResetState | Self::SkipOrReset)
+    }
 }
 
 /// Delta override applied on a session change.
@@ -215,6 +240,10 @@ pub struct ClockAdvance {
     /// With `backwards`: the step and the minimum it did not exceed, `None`
     /// when it was the `error` policy.
     pub disorder: Option<Disorder>,
+    /// True when a learned row's clock stepped backward within its session and
+    /// was skipped as stale under [`OnClockReset::Skip`] or
+    /// [`OnClockReset::SkipOrReset`]: clock state is completely untouched.
+    pub skipped_step_back: bool,
     /// The session id differs from the previous row's. Reported separately
     /// from `reset` so a caller can do something gentler than starting over —
     /// see `session_shrink` (ENHANCEMENTS E6).
@@ -1095,6 +1124,11 @@ impl ClockState {
         match step_back(cfg, raw, c.int_step(p)) {
             StepBack::Refused(disorder) => Some((raw, disorder)),
             StepBack::Reset => None,
+            StepBack::Skip => {
+                self.prev_clock = prev;
+                self.prev_session = prev_session;
+                None
+            }
         }
     }
 
@@ -1239,6 +1273,7 @@ impl ClockState {
             accepted: true,
             backwards: None,
             disorder: None,
+            skipped_step_back: false,
             session_changed: false,
             capped: capped || over,
             elapsed,
@@ -1340,6 +1375,7 @@ impl ClockState {
             accepted: true,
             backwards: None,
             disorder: None,
+            skipped_step_back: false,
             session_changed: false,
             capped: capped || over,
             elapsed,
@@ -1413,6 +1449,7 @@ impl ClockState {
             accepted: true,
             backwards: None,
             disorder: None,
+            skipped_step_back: false,
             session_changed: false,
             capped: capped || over,
             elapsed,
@@ -1457,6 +1494,7 @@ impl ClockState {
                 accepted: accept,
                 backwards: (!scoring).then_some(bad),
                 disorder: None,
+                skipped_step_back: false,
                 session_changed: false,
                 capped: false,
                 elapsed: 0.0,
@@ -1538,6 +1576,21 @@ impl ClockState {
                                 backwards = Some(raw);
                             }
                             StepBack::Reset => reset = true,
+                            StepBack::Skip => {
+                                return ClockAdvance {
+                                    d_clock: 0.0,
+                                    reset: false,
+                                    accepted: false,
+                                    backwards: None,
+                                    disorder: None,
+                                    skipped_step_back: true,
+                                    session_changed: false,
+                                    capped: false,
+                                    elapsed: 0.0,
+                                    stamp: None,
+                                    elapsed_stamp: None,
+                                };
+                            }
                         }
                     }
                     0.0
@@ -1643,6 +1696,7 @@ impl ClockState {
                 accepted: true,
                 backwards,
                 disorder,
+                skipped_step_back: false,
                 session_changed,
                 capped: capped || over,
                 elapsed,
@@ -1661,6 +1715,7 @@ impl ClockState {
                 accepted: false,
                 backwards,
                 disorder,
+                skipped_step_back: false,
                 session_changed,
                 capped,
                 elapsed: 0.0,
@@ -1700,6 +1755,7 @@ fn not_a_step(clock: Option<ClockValue>, raw: Option<f64>) -> Option<f64> {
 enum StepBack {
     Refused(Option<Disorder>),
     Reset,
+    Skip,
 }
 
 #[inline]
@@ -1719,6 +1775,9 @@ fn step_back(cfg: &ClockCfg, raw: f64, int_raw: Option<i128>) -> StepBack {
             min_backwards_jump: cfg.min_backwards_jump,
         })),
         OnClockReset::ResetState => StepBack::Reset,
+        OnClockReset::Skip => StepBack::Skip,
+        OnClockReset::SkipOrReset if late => StepBack::Skip,
+        OnClockReset::SkipOrReset => StepBack::Reset,
     }
 }
 
@@ -2898,7 +2957,12 @@ mod tests {
     /// nothing here distinguished `raw < 0.0` from `raw <= 0.0`.)
     #[test]
     fn duplicate_clock_values_are_zero_deltas() {
-        for policy in [OnClockReset::ResetState, OnClockReset::Error] {
+        for policy in [
+            OnClockReset::ResetState,
+            OnClockReset::Error,
+            OnClockReset::Skip,
+            OnClockReset::SkipOrReset,
+        ] {
             let mut c = ClockState::new();
             let cfg = ClockCfg {
                 gap_cap: 10.0,
@@ -2916,7 +2980,7 @@ mod tests {
                 "{policy:?}: repeated clock must give delta 0"
             );
             assert!(
-                !a.reset && a.backwards.is_none(),
+                !a.reset && a.backwards.is_none() && !a.skipped_step_back,
                 "{policy:?}: a repeated clock is neither a reset nor a step back"
             );
             // and a genuinely backwards clock is handled by the policy
@@ -2924,6 +2988,13 @@ mod tests {
             match policy {
                 OnClockReset::ResetState => assert!(b.reset),
                 OnClockReset::Error => assert_eq!(b.backwards, Some(-1.0)),
+                OnClockReset::Skip => {
+                    assert!(b.skipped_step_back && !b.reset && b.backwards.is_none())
+                }
+                OnClockReset::SkipOrReset => {
+                    // min_backwards_jump == 0.0 so step of 1.0 > 0.0 resets.
+                    assert!(b.reset && !b.skipped_step_back);
+                }
             }
         }
     }
@@ -4731,5 +4802,127 @@ mod task_252_paths {
             Stamp::Ns(3 * i128::from(SEC)).cmp_span_ns(Stamp::Int(1, 0.0), 2.0, None),
             Ordering::Equal
         );
+    }
+
+    #[test]
+    fn on_clock_reset_skip_leaves_state_untouched_across_all_clock_types() {
+        let cfg = ClockCfg {
+            gap_cap: 100.0,
+            on_clock_reset: OnClockReset::Skip,
+            session_gap: None,
+            min_backwards_jump: 0.0,
+        };
+        let caps = ExactCaps::default();
+        // Float, integer, and temporal streams with stale rows interleaved must
+        // match pre-filtered monotonic streams bit for bit.
+        let sequences: &[(&[ClockValue], &[ClockValue])] = &[
+            (
+                &[
+                    ClockValue::F64(1.0),
+                    ClockValue::F64(5.0),
+                    ClockValue::F64(3.0),
+                    ClockValue::F64(4.99),
+                    ClockValue::F64(5.0),
+                    ClockValue::F64(8.0),
+                ],
+                &[
+                    ClockValue::F64(1.0),
+                    ClockValue::F64(5.0),
+                    ClockValue::F64(5.0),
+                    ClockValue::F64(8.0),
+                ],
+            ),
+            (
+                &[
+                    ClockValue::I64(10),
+                    ClockValue::I64(20),
+                    ClockValue::I64(19),
+                    ClockValue::I64(15),
+                    ClockValue::I64(25),
+                ],
+                &[
+                    ClockValue::I64(10),
+                    ClockValue::I64(20),
+                    ClockValue::I64(25),
+                ],
+            ),
+            (
+                &[
+                    ClockValue::Ns(T0),
+                    ClockValue::Ns(T0 + 5 * SEC),
+                    ClockValue::Ns(T0 + 2 * SEC),
+                    ClockValue::Ns(T0 + 9 * SEC),
+                ],
+                &[
+                    ClockValue::Ns(T0),
+                    ClockValue::Ns(T0 + 5 * SEC),
+                    ClockValue::Ns(T0 + 9 * SEC),
+                ],
+            ),
+        ];
+        for (raw, clean) in sequences {
+            let mut with_skip = ClockState::new();
+            let mut oracle = ClockState::new();
+            let mut ref_check = ClockState::new();
+            let mut got_advs = Vec::new();
+            for &v in *raw {
+                assert!(ref_check.refusal(&cfg, Some(v), None).is_none());
+                let before = with_skip.clone();
+                let adv = with_skip.advance_stamped(&cfg, &caps, Some(v), None, true);
+                if adv.skipped_step_back {
+                    assert!(!adv.accepted && !adv.reset && adv.backwards.is_none());
+                    assert_eq!(with_skip, before);
+                } else {
+                    got_advs.push(adv);
+                }
+            }
+            let oracle_advs: Vec<_> = clean
+                .iter()
+                .map(|&v| oracle.advance_stamped(&cfg, &caps, Some(v), None, true))
+                .collect();
+            assert_eq!(got_advs, oracle_advs);
+            assert_eq!(with_skip, oracle);
+            assert_eq!(ref_check.last_clock(), oracle.last_clock());
+        }
+    }
+
+    #[test]
+    fn skip_or_reset_skips_at_or_below_threshold_and_restarts_above() {
+        let cfg = ClockCfg {
+            gap_cap: 100.0,
+            on_clock_reset: OnClockReset::SkipOrReset,
+            session_gap: None,
+            min_backwards_jump: 5.0,
+        };
+        let caps = ExactCaps::default();
+        let mut c = ClockState::new();
+        c.advance_stamped(&cfg, &caps, Some(ClockValue::F64(10.0)), None, true);
+        // Step back of 3 <= 5: skip, watermark stays 10.
+        let a1 = c.advance_stamped(&cfg, &caps, Some(ClockValue::F64(7.0)), None, true);
+        assert!(a1.skipped_step_back && !a1.reset && a1.backwards.is_none());
+        assert_eq!(c.last_clock(), Some(ClockValue::F64(10.0)));
+        // Exact boundary step back of 5 <= 5: skip, watermark stays 10.
+        let a2 = c.advance_stamped(&cfg, &caps, Some(ClockValue::F64(5.0)), None, true);
+        assert!(a2.skipped_step_back && !a2.reset && a2.backwards.is_none());
+        assert_eq!(c.last_clock(), Some(ClockValue::F64(10.0)));
+        // Step back of 5.001 > 5: restart, watermark moves to 4.999.
+        let a3 = c.advance_stamped(&cfg, &caps, Some(ClockValue::F64(4.999)), None, true);
+        assert!(a3.reset && !a3.skipped_step_back && a3.backwards.is_none() && a3.accepted);
+        assert_eq!(c.last_clock(), Some(ClockValue::F64(4.999)));
+
+        // Integer precision boundary at 2^53.
+        let two53 = 1i64 << 53;
+        let icfg = ClockCfg {
+            gap_cap: 1e18,
+            on_clock_reset: OnClockReset::SkipOrReset,
+            session_gap: None,
+            min_backwards_jump: two53 as f64,
+        };
+        let mut ic = ClockState::new();
+        ic.advance_stamped(&icfg, &caps, Some(ClockValue::I64(two53 + 10)), None, true);
+        let s_eq = ic.advance_stamped(&icfg, &caps, Some(ClockValue::I64(10)), None, true);
+        assert!(s_eq.skipped_step_back && !s_eq.reset);
+        let s_gt = ic.advance_stamped(&icfg, &caps, Some(ClockValue::I64(9)), None, true);
+        assert!(s_gt.reset && !s_gt.skipped_step_back);
     }
 }

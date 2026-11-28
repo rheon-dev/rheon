@@ -110,6 +110,8 @@ pub struct BarsConfig {
     pub max_span: Option<f64>,
     #[serde(default)]
     pub restart_after_step_back: Option<f64>,
+    #[serde(default, skip_serializing_if = "crate::spec::is_default_step_back")]
+    pub on_step_back: Option<String>,
     /// Whether a bar cut short by the clock is emitted.
     #[serde(default = "yes")]
     pub keep_partial: bool,
@@ -366,6 +368,10 @@ struct BarsFile {
     groups: Vec<(GroupKey, Group)>,
     #[serde(default)]
     high_water: Option<GroupKey>,
+    /// Per-group stale rows dropped under `on_step_back = "skip"`, sorted by
+    /// group key; absent when empty so default state bytes are untouched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skipped_step_back: Vec<(GroupKey, u64)>,
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     checksum: Option<crate::checksum::Trailer>,
 }
@@ -386,6 +392,12 @@ pub struct Bars {
     total_bytes: u64,
     warned_half: bool,
     notices: Vec<String>,
+    /// Persisted stale-row drop counts per group under `on_step_back = "skip"`,
+    /// kept outside [`Group`] so `group_bytes` is unchanged.
+    skipped_step_back: HashMap<GroupKey, u64, FixedState>,
+    /// Transient run counters drained by [`Self::take_step_back_notices`].
+    skipped_step_back_run: u64,
+    skipped_groups_run: std::collections::HashSet<GroupKey, FixedState>,
 }
 
 /// The group key's text forms a monotone close orders as numbers.
@@ -505,6 +517,11 @@ impl Bars {
                 ));
             }
         }
+        let mut cfg = cfg;
+        crate::spec::parse_step_back(WHO, cfg.on_step_back.as_deref(), true)?;
+        if cfg.on_step_back.as_deref() == Some("error") {
+            cfg.on_step_back = None;
+        }
         if cfg.monotone && cfg.group.is_none() {
             return Err(format!(
                 "{WHO}: group_close=\"monotone\" closes each group when a greater key arrives, \
@@ -564,6 +581,9 @@ impl Bars {
             total_bytes: 0,
             warned_half: false,
             notices: Vec::new(),
+            skipped_step_back: HashMap::default(),
+            skipped_step_back_run: 0,
+            skipped_groups_run: std::collections::HashSet::default(),
         };
         if bars.cfg.max_state_bytes == 0 || bars.cfg.max_total_bytes == 0 {
             return Err(format!(
@@ -613,6 +633,49 @@ impl Bars {
         std::mem::take(&mut self.notices)
     }
 
+    /// Summary notice for stale rows dropped under `on_step_back = "skip"`,
+    /// drained once at the end of a run.
+    pub fn take_step_back_notices(&mut self) -> Vec<String> {
+        let rows = std::mem::take(&mut self.skipped_step_back_run);
+        let groups = std::mem::take(&mut self.skipped_groups_run).len();
+        if rows == 0 {
+            return Vec::new();
+        }
+        let row_word = if rows == 1 { "row" } else { "rows" };
+        let msg = if self.cfg.group.is_some() {
+            let grp_word = if groups == 1 { "group" } else { "groups" };
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} across {groups} {grp_word} under \
+                 on_step_back=\"skip\" (clock stepped backward; stale rows dropped)."
+            )
+        } else {
+            format!(
+                "{WHO}: skipped {rows} stale {row_word} under on_step_back=\"skip\" (clock \
+                 stepped backward; stale rows dropped)."
+            )
+        };
+        vec![msg]
+    }
+
+    /// Total persisted stale rows dropped across all groups.
+    pub fn total_skipped_step_back(&self) -> u64 {
+        self.skipped_step_back
+            .values()
+            .fold(0u64, |acc, &n| acc.saturating_add(n))
+    }
+
+    /// Persisted stale-row counts by group key.
+    pub fn skipped_step_back_by_group(&self) -> Vec<(GroupKey, u64)> {
+        let mut out: Vec<_> = self
+            .skipped_step_back
+            .iter()
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (k.clone(), n))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// The output's columns.
     pub fn schema(&self) -> Schema {
         let mut out = Schema::default();
@@ -641,6 +704,13 @@ impl Bars {
             .map(|(k, g)| (k.clone(), g.clone()))
             .collect();
         groups.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut skipped_step_back: Vec<(GroupKey, u64)> = self
+            .skipped_step_back
+            .iter()
+            .filter(|&(_, &n)| n > 0)
+            .map(|(k, &n)| (k.clone(), n))
+            .collect();
+        skipped_step_back.sort_by(|a, b| a.0.cmp(&b.0));
         let file = BarsFile {
             magic: crate::envelope::MAGIC.into(),
             kind: crate::envelope::Kind::Bars.tag().into(),
@@ -649,6 +719,7 @@ impl Bars {
             clock_kind: self.clock_kind,
             groups,
             high_water: self.high_water.clone(),
+            skipped_step_back,
             checksum: Some(crate::checksum::Trailer::Patched),
         };
         let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
@@ -738,6 +809,21 @@ impl Bars {
                 differs.push(format!("{key} ({x:?}, here {y:?})"));
             }
         }
+        fn norm_step(s: Option<&str>) -> &str {
+            match s {
+                None | Some("error") => "error",
+                Some(other) => other,
+            }
+        }
+        if norm_step(a.on_step_back.as_deref()) != norm_step(b.on_step_back.as_deref())
+            && !differs.iter().any(|d| d.starts_with("on_step_back"))
+        {
+            differs.push(format!(
+                "on_step_back ({:?}, here {:?})",
+                norm_step(a.on_step_back.as_deref()),
+                norm_step(b.on_step_back.as_deref())
+            ));
+        }
         if a.threshold != b.threshold && !b.call.contains_key("threshold") {
             differs.push("threshold".into());
         }
@@ -778,6 +864,28 @@ impl Bars {
         }
         bars.clock_kind = file.clock_kind;
         bars.high_water = file.high_water;
+        let skips = bars.cfg.on_step_back.as_deref() == Some("skip");
+        let damaged = |why: &str| {
+            format!(
+                "{WHO}: the state is damaged: {why}. Load an undamaged copy of the state file, or \
+                 leave out load_state to start over."
+            )
+        };
+        if !skips && !file.skipped_step_back.is_empty() {
+            return Err(damaged(
+                "it records skipped step-back rows under on_step_back=\"error\"",
+            ));
+        }
+        for (key, count) in file.skipped_step_back {
+            if count == 0 || (bars.cfg.group.is_none() && key.as_str() != Some("")) {
+                return Err(damaged(
+                    "its skipped step-back counts do not match this call",
+                ));
+            }
+            if bars.skipped_step_back.insert(key, count).is_some() {
+                return Err(damaged("a group's skipped step-back count is held twice"));
+            }
+        }
         for (key, g) in file.groups {
             bars.total_bytes += bars.group_bytes(key.as_str().map_or(0, str::len));
             bars.groups.insert(key, g);
@@ -900,6 +1008,7 @@ impl Bars {
                         closed.sort();
                         for k in closed {
                             if let Some(mut g) = self.groups.remove(&k) {
+                                self.skipped_step_back.remove(&k);
                                 self.total_bytes = self.total_bytes.saturating_sub(
                                     self.group_bytes(k.as_str().map_or(0, str::len)),
                                 );
@@ -925,21 +1034,25 @@ impl Bars {
                 self.admit(&key, at)?;
             }
             let cfg = &self.cfg;
-            let g = self.groups.get_mut(&key).expect("admitted above");
-            // The order check, for every row whatever its weight, against
-            // the group's last row of any weight; and for a row of positive
-            // weight, against its last row of positive weight too, since a
-            // row of weight 0 is in no clock: a step back from it past
-            // `restart_after_step_back` starts the stream over.
-            let refuse = |prev: Instant| -> PolarsResult<bool> {
+            let skip_step_back = cfg.on_step_back.as_deref() == Some("skip");
+            #[derive(Clone, Copy)]
+            enum StepCheck {
+                Ok,
+                Restart,
+                Skip,
+            }
+            let check = |prev: Instant| -> PolarsResult<StepCheck> {
                 if t.partial_cmp(&prev) != Some(Ordering::Less) {
-                    return Ok(false);
+                    return Ok(StepCheck::Ok);
                 }
                 if cfg
                     .restart_after_step_back
                     .is_some_and(|r| span_past(prev, t, r))
                 {
-                    return Ok(true);
+                    return Ok(StepCheck::Restart);
+                }
+                if skip_step_back {
+                    return Ok(StepCheck::Skip);
                 }
                 polars_bail!(ComputeError:
                 "{WHO}: clock column {:?} is {} at row {at} (counting from 0), below the \
@@ -951,17 +1064,40 @@ impl Bars {
                     ", or give restart_after_step_back if the clock starts over on purpose"
                 });
             };
-            if let Some(prev) = g.last_clock {
-                refuse(prev)?;
+            let g = self.groups.get(&key).expect("admitted above");
+            let mut skipped = false;
+            if let Some(prev) = g.last_clock
+                && matches!(check(prev)?, StepCheck::Skip)
+            {
+                skipped = true;
             }
+            let restart = if skipped || weight == 0.0 {
+                false
+            } else {
+                match g.time_last {
+                    Some(last) => match check(last)? {
+                        StepCheck::Skip => {
+                            skipped = true;
+                            false
+                        }
+                        StepCheck::Restart => true,
+                        StepCheck::Ok => false,
+                    },
+                    None => false,
+                }
+            };
+            if skipped {
+                let entry = self.skipped_step_back.entry(key.clone()).or_insert(0);
+                *entry = entry.saturating_add(1);
+                self.skipped_step_back_run = self.skipped_step_back_run.saturating_add(1);
+                self.skipped_groups_run.insert(key.clone());
+                continue;
+            }
+            let g = self.groups.get_mut(&key).expect("admitted above");
             g.last_clock = Some(t);
             if weight == 0.0 {
                 continue;
             }
-            let restart = match g.time_last {
-                Some(last) => refuse(last)?,
-                None => false,
-            };
             let session = sessions.map(|s| session_hash(s.get(row)));
             // The cuts, each optional: the open bar ends before this row.
             let cut = restart

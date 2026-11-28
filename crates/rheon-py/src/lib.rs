@@ -1099,7 +1099,7 @@ struct PyRefreshTime {
 #[pymethods]
 impl PyRefreshTime {
     #[new]
-    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
+    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None, age=false, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
@@ -1110,11 +1110,13 @@ impl PyRefreshTime {
         pairs: bool,
         keep: Option<Vec<String>>,
         age: bool,
+        skip_step_back: bool,
     ) -> PyResult<Self> {
         Ok(Self {
             inner: rheon_polars::RefreshTime::new(names, pairs)
                 .map_err(PyValueError::new_err)?
-                .with_age(age),
+                .with_age(age)
+                .with_skip_step_back(skip_step_back),
             series,
             clock,
             value,
@@ -1126,7 +1128,7 @@ impl PyRefreshTime {
     /// A sampler that goes on from a saved state (`RefreshTime::load_bytes`):
     /// `names` and `pairs` must be the ones it was saved with.
     #[staticmethod]
-    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
+    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None, age=false, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1138,14 +1140,16 @@ impl PyRefreshTime {
         pairs: bool,
         keep: Option<Vec<String>>,
         age: bool,
+        skip_step_back: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rheon_polars::RefreshTime::load_bytes_with_age(
+            inner: rheon_polars::RefreshTime::load_bytes_with_options(
                 state,
                 names,
                 pairs,
                 group.is_some(),
                 age,
+                skip_step_back,
             )
             .map_err(PyValueError::new_err)?,
             series,
@@ -1200,6 +1204,14 @@ impl PyRefreshTime {
             .map_err(|e| run_err(&e, None))?;
         Ok(PyDataFrame(out))
     }
+
+    /// Summary notices for stale rows dropped under `on_step_back = "skip"`.
+    fn take_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let mut this = slf
+            .try_borrow_mut()
+            .map_err(|_| refresh_busy("take_notices"))?;
+        Ok(this.inner.take_notices())
+    }
 }
 
 /// The error for a sampler reached from a second thread while a call is on
@@ -1241,6 +1253,7 @@ impl From<PyRestart> for rheon_polars::Restart {
 
 /// The settings `Merge` and `Merge.load_bytes` take, and the schemas of
 /// `frames`, empty frames of each input's columns.
+#[allow(clippy::too_many_arguments)]
 fn merge_parts(
     frames: Vec<PyDataFrame>,
     clock: String,
@@ -1249,6 +1262,7 @@ fn merge_parts(
     restart: Option<PyRestart>,
     restart_text: Option<String>,
     carry: Option<Vec<String>>,
+    skip_step_back: bool,
 ) -> (Vec<polars::prelude::Schema>, rheon_polars::MergeConfig) {
     let schemas = frames
         .into_iter()
@@ -1261,6 +1275,7 @@ fn merge_parts(
         restart: restart.map(Into::into),
         restart_text,
         carry: carry.unwrap_or_default(),
+        skip_step_back,
     };
     (schemas, cfg)
 }
@@ -1268,7 +1283,7 @@ fn merge_parts(
 #[pymethods]
 impl PyMerge {
     #[new]
-    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
+    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
@@ -1279,8 +1294,18 @@ impl PyMerge {
         restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
+        skip_step_back: bool,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
+        let (schemas, cfg) = merge_parts(
+            frames,
+            clock,
+            source,
+            by,
+            restart,
+            restart_text,
+            carry,
+            skip_step_back,
+        );
         Ok(Self {
             inner: rheon_polars::Merge::new(names, schemas, cfg).map_err(|e| run_err(&e, None))?,
         })
@@ -1288,7 +1313,7 @@ impl PyMerge {
 
     /// A merge that goes on from a saved state (`Merge::load_bytes`).
     #[staticmethod]
-    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
+    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None, skip_step_back=false))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1300,8 +1325,18 @@ impl PyMerge {
         restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
+        skip_step_back: bool,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
+        let (schemas, cfg) = merge_parts(
+            frames,
+            clock,
+            source,
+            by,
+            restart,
+            restart_text,
+            carry,
+            skip_step_back,
+        );
         Ok(Self {
             inner: rheon_polars::Merge::load_bytes(state, names, schemas, cfg)
                 .map_err(|e| run_err(&e, None))?,
@@ -1369,6 +1404,12 @@ impl PyMerge {
         this.inner
             .save(std::path::Path::new(path))
             .map_err(|e| save_err(path, e))
+    }
+
+    /// Summary notices for stale rows dropped under `on_step_back = "skip"`.
+    fn take_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let mut this = slf.try_borrow_mut().map_err(|_| merge_busy())?;
+        Ok(this.inner.take_notices())
     }
 }
 
@@ -1525,6 +1566,14 @@ impl PyWindows {
             .try_borrow_mut()
             .map_err(|_| windows_busy("take_warning"))?;
         Ok(this.inner.take_warning())
+    }
+
+    /// Summary notices for stale rows skipped under `on_step_back = "skip"`.
+    fn take_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let mut this = slf
+            .try_borrow_mut()
+            .map_err(|_| windows_busy("take_notices"))?;
+        Ok(this.inner.take_notices())
     }
 }
 
@@ -2093,6 +2142,12 @@ impl PyBars {
     fn take_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
         let mut this = slf.try_borrow_mut().map_err(|_| bars_busy())?;
         Ok(this.inner.take_notices())
+    }
+
+    /// Summary notices for stale rows dropped under `on_step_back = "skip"`.
+    fn take_step_back_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let mut this = slf.try_borrow_mut().map_err(|_| bars_busy())?;
+        Ok(this.inner.take_step_back_notices())
     }
 
     /// The bytes a group holds at most, with a key of `key_len` bytes.

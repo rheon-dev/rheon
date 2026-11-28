@@ -1137,6 +1137,7 @@ def _common(
     lam: float | None = None,
     gap_cap: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
+    on_step_back: Literal["error", "skip"] = "error",
     session: str | None = None,
     session_gap: float | Duration | None = None,
     weight: str | None = None,
@@ -1289,6 +1290,8 @@ def _common(
     # without them is the dict it always was.
     if label_clock is not None:
         spec["label_clock"] = label_clock if isinstance(label_clock, str) else list(label_clock)
+    if on_step_back != "error":
+        spec["on_step_back"] = on_step_back
     if max_held_rows is not None:
         spec["max_held_rows"] = max_held_rows
     if held_overflow is not None:

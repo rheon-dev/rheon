@@ -145,19 +145,26 @@ impl Windows {
                 open[(s - self.held_first) as usize] += n_wait;
             }
         }
-        if let Some(c) = &self.cross {
-            c.check_rows(self.next_seq)?;
+        let bad_open =
+            || Err("a held row's open windows are not the ones still open over it".into());
+        if !self.stale_seqs_valid() {
+            return bad_open();
         }
         if let Some(first) = self.cross.as_ref().and_then(|c| c.waiting_from()) {
-            if first < self.held_first {
+            if first < self.held_first || first > self.next_seq {
                 return Err("its cross-group stamp opened before its held rows".into());
             }
-            for o in &mut open[(first - self.held_first) as usize..] {
-                *o += 1;
+            for seq in first..self.next_seq {
+                if self.stale_seqs.is_empty() || self.stale_seqs.binary_search(&seq).is_err() {
+                    open[(seq - self.held_first) as usize] += 1;
+                }
             }
         }
         if self.held_meta.iter().zip(&open).any(|(m, &o)| m.open != o) {
-            return Err("a held row's open windows are not the ones still open over it".into());
+            return bad_open();
+        }
+        if let Some(c) = &self.cross {
+            c.check_rows(self.next_seq, &self.stale_seqs)?;
         }
         self.check_links()?;
         // The keys name the groups one to one: `group` makes each group
@@ -292,6 +299,23 @@ impl Windows {
             "waiting" => {
                 let past = self.held_first + self.held_meta.len() as u64;
                 self.groups[0].waiting[0].seq = past;
+            }
+            "stale_oob" => {
+                let past = self.held_first + self.held_meta.len() as u64;
+                self.stale_seqs.push_back(past);
+            }
+            "stale_dup" => {
+                if let Some(&s) = self.stale_seqs.front() {
+                    self.stale_seqs.push_back(s);
+                }
+            }
+            "stale_open" => {
+                if let Some(&s) = self.stale_seqs.front() {
+                    self.held_meta[(s - self.held_first) as usize].open = 1;
+                }
+            }
+            "stale_under_error" => {
+                self.groups[0].skipped_step_back = 1;
             }
             other => unreachable!("no damage {other:?}"),
         }
